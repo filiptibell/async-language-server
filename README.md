@@ -25,7 +25,7 @@ It is however generally stable, so feel free to use it at your own risk, either 
 - Specifying it as a git dependency
 - Forking this repository
 
-[async-lsp](https://crates.io/crates/async-lsp)
-[tokio](https://tokio.rs)
-[ropey](https://crates.io/crates/ropey)
-[tree-sitter](https://tree-sitter.github.io/tree-sitter/)
+[async-lsp]: (https://crates.io/crates/async-lsp)
+[tokio]: (https://tokio.rs)
+[ropey]: (https://crates.io/crates/ropey)
+[tree-sitter]: (https://tree-sitter.github.io/tree-sitter/)
