@@ -138,7 +138,9 @@ impl DocumentMatchers {
             }
 
             for lang in &matcher.lang_strings {
-                languages.insert(lang.clone(), Arc::clone(&matcher));
+                let mut lang = lang.trim().to_string();
+                lang.make_ascii_lowercase();
+                languages.insert(lang, Arc::clone(&matcher));
             }
         }
 
@@ -148,18 +150,16 @@ impl DocumentMatchers {
         }
     }
 
-    pub(crate) fn find(
-        &self,
-        url: impl Into<Url>,
-        lang: impl AsRef<str>,
-    ) -> Option<Arc<DocumentMatcher>> {
-        let url = url.into();
-        let lang = lang.as_ref();
-        self.languages.get(lang).cloned().or_else(|| {
-            self.globsets
-                .iter()
-                .find(|(globset, _)| url.to_file_path().is_ok_and(|p| globset.is_match(p)))
-                .map(|(_, matcher)| Arc::clone(matcher))
+    pub(crate) fn find(&self, url: &Url, lang: &str) -> Option<Arc<DocumentMatcher>> {
+        let mut lang = lang.trim().to_string();
+        lang.make_ascii_lowercase();
+        self.languages.get(lang.as_str()).cloned().or_else(|| {
+            url.to_file_path().ok().and_then(|p| {
+                self.globsets
+                    .iter()
+                    .find(|(globset, _)| globset.is_match(&p))
+                    .map(|(_, matcher)| Arc::clone(matcher))
+            })
         })
     }
 }
