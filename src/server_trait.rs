@@ -15,10 +15,8 @@ use async_lsp::{
     },
 };
 
-#[cfg(feature = "tree-sitter")]
-use tree_sitter::Language;
-
 use crate::{
+    document_matcher::DocumentMatcher,
     result::{ServerError, ServerResult},
     server_state::ServerState,
 };
@@ -42,9 +40,8 @@ pub trait Server {
         None
     }
 
-    #[cfg(feature = "tree-sitter")]
-    fn determine_tree_sitter_language(uri: &Url, language: &str) -> Option<Language> {
-        None
+    fn server_document_matchers() -> Vec<DocumentMatcher> {
+        vec![]
     }
 
     // Hover, Completion, Code Action, Document Link

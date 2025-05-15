@@ -1,4 +1,5 @@
 mod document;
+mod document_matcher;
 mod result;
 mod serve;
 mod server_state;
@@ -16,6 +17,7 @@ pub mod tree_sitter_utils;
 
 pub mod server {
     pub use crate::document::{Document, DocumentReader};
+    pub use crate::document_matcher::DocumentMatcher;
     pub use crate::result::{ServerError, ServerErrorCode, ServerResult};
     pub use crate::serve::serve;
     pub use crate::server_state::ServerState;

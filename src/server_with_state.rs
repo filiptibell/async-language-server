@@ -37,7 +37,7 @@ pub(crate) struct LanguageServerWithState<T: Server> {
 impl<T: Server> LanguageServerWithState<T> {
     pub(crate) fn new(client: ClientSocket, server: T) -> Self {
         let server = Arc::new(server);
-        let state = ServerState::new(client);
+        let state = ServerState::new::<T>(client);
         Self { server, state }
     }
 }

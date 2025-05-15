@@ -16,7 +16,7 @@ use async_lsp::{
 #[cfg(feature = "tree-sitter")]
 use tree_sitter::{InputEdit, Parser, Point};
 
-use crate::{document::Document, server::Server};
+use crate::{document::Document, document_matcher::DocumentMatchers, server::Server};
 
 /**
     Managed state for an LSP server.
@@ -28,6 +28,8 @@ use crate::{document::Document, server::Server};
 pub struct ServerState {
     client: ClientSocket,
     documents: Arc<DashMap<Url, Document>>,
+    #[allow(dead_code)]
+    matchers: DocumentMatchers,
 }
 
 impl ServerState {
@@ -61,15 +63,23 @@ impl ServerState {
 // Private implementation
 
 impl ServerState {
-    pub(crate) fn new(client: ClientSocket) -> Self {
+    pub(crate) fn new<T: Server>(client: ClientSocket) -> Self {
         let documents = Arc::new(DashMap::new());
-        Self { client, documents }
+        let matchers = DocumentMatchers::new(T::server_document_matchers());
+        Self {
+            client,
+            documents,
+            matchers,
+        }
     }
 
     #[allow(clippy::extra_unused_type_parameters)]
     fn insert_document<T: Server>(&self, url: Url, text: String, version: i32, language: String) {
         #[cfg(feature = "tree-sitter")]
-        let mut tree_sitter_lang = T::determine_tree_sitter_language(&url, language.as_str());
+        let mut tree_sitter_lang = self
+            .matchers
+            .find(url.clone(), language.as_str())
+            .and_then(|m| m.lang_grammar.clone());
 
         #[cfg(feature = "tree-sitter")]
         let tree_sitter_tree = if let Some(lang) = tree_sitter_lang.as_ref() {
@@ -284,7 +294,10 @@ impl ServerState {
         // re-create the entire tree-sitter tree using those new contents
         #[cfg(feature = "tree-sitter")]
         {
-            let mut tree_sitter_lang = T::determine_tree_sitter_language(doc.url(), doc.language());
+            let mut tree_sitter_lang = self
+                .matchers
+                .find(doc.url().clone(), doc.language())
+                .and_then(|m| m.lang_grammar.clone());
 
             let tree_sitter_tree = if let Some(lang) = tree_sitter_lang.as_ref() {
                 let mut parser = Parser::new();

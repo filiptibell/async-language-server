@@ -18,6 +18,7 @@ tree-sitter = ["dep:tree-sitter"]
 async-lsp = { version = "0.2.2", default-features = false, features = ["client-monitor", "omni-trait"] }
 dashmap = "6.1"
 futures = "0.3"
+globset = "0.4"
 ropey = "1.6"
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["io-std", "io-util", "net"] }
