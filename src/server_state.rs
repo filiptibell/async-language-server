@@ -78,7 +78,7 @@ impl ServerState {
         #[cfg(feature = "tree-sitter")]
         let mut tree_sitter_lang = self
             .matchers
-            .find(url.clone(), language.as_str())
+            .find(&url, language.as_str())
             .and_then(|m| m.lang_grammar.clone());
 
         #[cfg(feature = "tree-sitter")]
@@ -296,7 +296,7 @@ impl ServerState {
         {
             let mut tree_sitter_lang = self
                 .matchers
-                .find(doc.url().clone(), doc.language())
+                .find(doc.url(), doc.language())
                 .and_then(|m| m.lang_grammar.clone());
 
             let tree_sitter_tree = if let Some(lang) = tree_sitter_lang.as_ref() {
