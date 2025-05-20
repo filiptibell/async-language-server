@@ -7,10 +7,11 @@ use async_lsp::{
     ErrorCode,
     lsp_types::{
         ClientCapabilities, CodeAction, CodeActionParams, CodeActionResponse, CompletionItem,
-        CompletionParams, CompletionResponse, DocumentLink, DocumentLinkParams,
-        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, Location,
-        PrepareRenameResponse, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo,
-        TextDocumentPositionParams, Url, WorkspaceEdit,
+        CompletionParams, CompletionResponse, DocumentFormattingParams, DocumentLink,
+        DocumentLinkParams, DocumentRangeFormattingParams, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverParams, Location, PrepareRenameResponse,
+        ReferenceParams, RenameParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
+        TextEdit, Url, WorkspaceEdit,
         request::{GotoDeclarationParams, GotoDeclarationResponse},
     },
 };
@@ -142,6 +143,24 @@ pub trait Server {
         params: TextDocumentPositionParams,
     ) -> impl Future<Output = ServerResult<Option<PrepareRenameResponse>>> + Send {
         method_not_implemented("rename_prepare")
+    }
+
+    // Formatting
+
+    fn document_format(
+        &self,
+        state: ServerState,
+        params: DocumentFormattingParams,
+    ) -> impl Future<Output = ServerResult<Option<Vec<TextEdit>>>> + Send {
+        method_not_implemented("document_format")
+    }
+
+    fn document_range_format(
+        &self,
+        state: ServerState,
+        params: DocumentRangeFormattingParams,
+    ) -> impl Future<Output = ServerResult<Option<Vec<TextEdit>>>> + Send {
+        method_not_implemented("document_range_format")
     }
 }
 

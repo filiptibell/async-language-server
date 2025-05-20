@@ -11,11 +11,12 @@ use async_lsp::{
         CodeAction, CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
         CompletionResponse, DidChangeConfigurationParams, DidChangeTextDocumentParams,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        DocumentLink, DocumentLinkParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-        HoverParams, InitializeParams, InitializeResult, InitializedParams, Location,
-        PositionEncodingKind, PrepareRenameResponse, ReferenceParams, RenameParams, SaveOptions,
-        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, WorkspaceEdit,
+        DocumentFormattingParams, DocumentLink, DocumentLinkParams, DocumentRangeFormattingParams,
+        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams,
+        InitializeResult, InitializedParams, Location, PositionEncodingKind, PrepareRenameResponse,
+        ReferenceParams, RenameParams, SaveOptions, TextDocumentPositionParams,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit, WorkspaceEdit,
         request::{GotoDeclarationParams, GotoDeclarationResponse},
     },
 };
@@ -250,5 +251,25 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
         Box::pin(async move { Ok(server.rename_prepare(state, params).await?) })
+    }
+
+    // Forwarding for: Formatting
+
+    fn formatting(
+        &mut self,
+        params: DocumentFormattingParams,
+    ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
+        let server = Arc::clone(&self.server);
+        let state = self.state.clone();
+        Box::pin(async move { Ok(server.document_format(state, params).await?) })
+    }
+
+    fn range_formatting(
+        &mut self,
+        params: DocumentRangeFormattingParams,
+    ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
+        let server = Arc::clone(&self.server);
+        let state = self.state.clone();
+        Box::pin(async move { Ok(server.document_range_format(state, params).await?) })
     }
 }
