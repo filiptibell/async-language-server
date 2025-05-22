@@ -9,7 +9,8 @@ use ropey::Rope;
 use async_lsp::{
     ClientSocket, Result,
     lsp_types::{
-        DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Url,
+        DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        PositionEncodingKind, Url,
     },
 };
 
@@ -30,6 +31,7 @@ pub struct ServerState {
     documents: Arc<DashMap<Url, Document>>,
     #[allow(dead_code)]
     matchers: DocumentMatchers,
+    encoding: Arc<PositionEncodingKind>,
 }
 
 impl ServerState {
@@ -66,10 +68,12 @@ impl ServerState {
     pub(crate) fn new<T: Server>(client: ClientSocket) -> Self {
         let documents = Arc::new(DashMap::new());
         let matchers = DocumentMatchers::new(T::server_document_matchers());
+        let encoding = Arc::new(PositionEncodingKind::UTF16); // Default for LSP spec
         Self {
             client,
             documents,
             matchers,
+            encoding,
         }
     }
 
@@ -107,6 +111,10 @@ impl ServerState {
                 tree_sitter_tree,
             },
         );
+    }
+
+    pub(crate) fn set_position_encoding(&mut self, kind: PositionEncodingKind) {
+        self.encoding = Arc::new(kind);
     }
 
     pub(crate) fn handle_document_open<T: Server>(

@@ -23,6 +23,15 @@ use async_lsp::{
 
 use crate::{server_state::ServerState, server_trait::Server};
 
+// Default according to LSP specification - will be supported by all clients
+// that do not specify which position encoding they prefer and / or support.
+const POSITION_ENCODING_LSP_DEFAULT: PositionEncodingKind = PositionEncodingKind::UTF16;
+const POSITION_ENCODING_PREFERRED_ORDER: [PositionEncodingKind; 3] = [
+    PositionEncodingKind::UTF8,
+    PositionEncodingKind::UTF16,
+    PositionEncodingKind::UTF32,
+];
+
 /**
     The low-level language server implementation that automatically
     manages documents and forwards requests to the underlying server.
@@ -51,12 +60,34 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         &mut self,
         params: InitializeParams,
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
+        // 1. Extract available client position encodings, if any
+        let client_position_encodings = params
+            .capabilities
+            .general
+            .as_ref()
+            .and_then(|g| g.position_encodings.clone())
+            .filter(|e| !e.is_empty());
+
+        // 2. Get server info & capabilities from the server implementor
         let mut result = InitializeResult {
             server_info: T::server_info(),
             capabilities: T::server_capabilities(params.capabilities).unwrap_or_default(),
         };
 
-        result.capabilities.position_encoding = Some(PositionEncodingKind::UTF32);
+        // 3. Try to figure out what position encoding best matches what
+        //    both our server + the connected client prefers / supports
+        let mut negotiated_position_encoding = POSITION_ENCODING_LSP_DEFAULT;
+        if let Some(client_available_encodings) = client_position_encodings {
+            for server_preferred_encoding in POSITION_ENCODING_PREFERRED_ORDER {
+                if client_available_encodings.contains(&server_preferred_encoding) {
+                    negotiated_position_encoding = server_preferred_encoding;
+                    break;
+                }
+            }
+        }
+
+        // 4. Insert capabilities for our automatic handling of encodings & documents
+        result.capabilities.position_encoding = Some(negotiated_position_encoding.clone());
         result.capabilities.text_document_sync = Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 change: Some(TextDocumentSyncKind::INCREMENTAL),
@@ -68,38 +99,46 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
             },
         ));
 
+        // 5. Make sure that the state now also uses the negotiated encoding
+        self.state
+            .set_position_encoding(negotiated_position_encoding.clone());
+
+        // 6. Emit a useful message about the negotiation, if enabled
         #[cfg(feature = "tracing")]
         {
+            let mut lines = Vec::new();
+
+            // 6a. Client name & version
+            if let Some(info) = &params.client_info {
+                if let Some(version) = &info.version {
+                    lines.push(format!("{} v{}", info.name, version));
+                } else {
+                    lines.push(info.name.to_string());
+                }
+            }
+
+            // 6b. Workspace folders
             let num_folders = params
                 .workspace_folders
                 .as_deref()
                 .unwrap_or_default()
                 .len();
+            lines.push(format!(
+                "{} workspace folder{}",
+                num_folders,
+                if num_folders == 1 { "" } else { "s" }
+            ));
 
-            if let Some(info) = &params.client_info {
-                if let Some(version) = &info.version {
-                    info!(
-                        "Client connected - {} v{} - {} workspace folder{}",
-                        info.name,
-                        version,
-                        num_folders,
-                        if num_folders == 1 { "" } else { "s" }
-                    );
-                } else {
-                    info!(
-                        "Client connected - {} - {} workspace folder{}",
-                        info.name,
-                        num_folders,
-                        if num_folders == 1 { "" } else { "s" }
-                    );
-                }
-            } else {
-                info!(
-                    "Client connected - {} workspace folder{}",
-                    num_folders,
-                    if num_folders == 1 { "" } else { "s" }
-                );
-            }
+            // 6c. Position encoding
+            lines.push(format!(
+                "{} position encoding",
+                negotiated_position_encoding.as_str(),
+            ));
+
+            info!(
+                "Client negotiation was successful\n- {}",
+                lines.join("\n- ")
+            );
         }
 
         Box::pin(async move { Ok(result) })
