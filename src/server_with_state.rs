@@ -8,25 +8,14 @@ use tracing::{debug, info};
 use async_lsp::{
     ClientSocket, ErrorCode, LanguageServer, ResponseError, Result,
     lsp_types::{
-        CodeAction, CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
-        CompletionResponse, CompletionTextEdit, DidChangeConfigurationParams,
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DidSaveTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkParams,
-        DocumentRangeFormattingParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
-        HoverParams, InitializeParams, InitializeResult, InitializedParams, Location, Position,
-        PrepareRenameResponse, ReferenceParams, RenameParams, SaveOptions,
-        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkspaceEdit,
-        request::{GotoDeclarationParams, GotoDeclarationResponse},
+        DidChangeConfigurationParams, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+        DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams, InitializeResult,
+        InitializedParams, SaveOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
     },
 };
 
-use crate::{
-    server::Document,
-    server_state::ServerState,
-    server_trait::Server,
-    text_utils::{Encoding, position_to_encoding},
-};
+use crate::{server_state::ServerState, server_trait::Server, text_utils::Encoding};
 
 const POSITION_ENCODING_PREFERRED_ORDER: [Encoding; 3] = [
     // First, prefer to use UTF-8 encoding, since this will make all of
@@ -41,38 +30,38 @@ const POSITION_ENCODING_PREFERRED_ORDER: [Encoding; 3] = [
 ];
 
 macro_rules! implement_method {
-    (
-    	$our_function_name:ident,
-    	$real_function_name:ident,
-
-    	$params_ty:ty,
-    	$result_ty:ty,
-
-    	$try_extract_url:expr,
-    	$pre_method_callback:expr,
-    	$post_method_callback:expr
-    ) => {
-        fn $real_function_name(
+    ($async_lsp_method:ident => $our_server_trait_method:ident @ $request_type:ty) => {
+        fn $async_lsp_method(
             &mut self,
-            mut params: $params_ty,
-        ) -> BoxFuture<'static, Result<$result_ty, Self::Error>> {
+            mut params: <$request_type as crate::requests::Request>::Params,
+        ) -> BoxFuture<
+            'static,
+            Result<<$request_type as crate::requests::Request>::Response, Self::Error>,
+        > {
             let server = Arc::clone(&self.server);
             let state = self.state.clone();
             Box::pin(async move {
                 // 1. Try to extract the URL from the params for document tracking
-                let url: Option<Url> = $try_extract_url(&params);
+                let url: Option<Url> =
+                    <$request_type as crate::requests::Request>::extract_url(&params);
                 let mut ver: Option<i32> = None;
 
-                // 2. If we got an URL, track the document version & call the "pre method" callback
+                // 2. If we got an URL, track the document version & call the "modify params" callback
                 if let Some(url) = url.as_ref() {
                     if let Some(doc) = state.document(url) {
                         ver.replace(doc.version());
-                        $pre_method_callback(&state, &doc, &mut params);
+                        <$request_type as crate::requests::Request>::modify_params(
+                            &state,
+                            &doc,
+                            &mut params,
+                        );
                     }
                 }
 
                 // 3. Call the user-defined language server function
-                let mut result = server.$our_function_name(state.clone(), params).await?;
+                let mut result = server
+                    .$our_server_trait_method(state.clone(), params)
+                    .await?;
 
                 // 4. Check our document again, if we had one originally
                 if let Some(url) = url.as_ref() {
@@ -84,14 +73,26 @@ macro_rules! implement_method {
                                 "document was modified during processing",
                             ));
                         }
-                        // 4b. Version is not stale, run the final "post method" callback
-                        $post_method_callback(&state, &doc, &mut result);
+                        // 4b. Version is not stale, run the final "modify response" callback
+                        <$request_type as crate::requests::Request>::modify_response(
+                            &state,
+                            &doc,
+                            &mut result,
+                        );
                     }
                 }
 
                 Ok(result)
             })
         }
+    };
+}
+
+macro_rules! implement_methods {
+    ($($lsp_method:ident => $server_method:ident @ $request_type:ty),* $(,)?) => {
+        $(
+            implement_method!($lsp_method => $server_method @ $request_type);
+        )*
     };
 }
 
@@ -247,432 +248,22 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         self.state.handle_document_save::<T>(params)
     }
 
-    // Forwarding for: Hover, Completion, Code Action, Document Link
+    // async-lsp method name => our method name @ request type definition
 
-    fn hover(
-        &mut self,
-        mut params: HoverParams,
-    ) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            let Some(doc) = state.document(&params.text_document_position_params.text_document.uri)
-            else {
-                return Ok(None);
-            };
-
-            modify_incoming_position(
-                &state,
-                &doc,
-                &mut params.text_document_position_params.position,
-            );
-
-            let mut hover = server.hover(state.clone(), params).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            if let Some(hover) = hover.as_mut() {
-                if let Some(range) = hover.range.as_mut() {
-                    modify_outgoing_position(&state, &doc, &mut range.start);
-                    modify_outgoing_position(&state, &doc, &mut range.end);
-                }
-            }
-
-            Ok(hover)
-        })
-    }
-
-    fn completion(
-        &mut self,
-        mut params: CompletionParams,
-    ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            let Some(doc) = state.document(&params.text_document_position.text_document.uri) else {
-                return Ok(None);
-            };
-
-            modify_incoming_position(&state, &doc, &mut params.text_document_position.position);
-
-            let mut response = server.completion(state.clone(), params).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            if let Some(response) = response.as_mut() {
-                let items = match response {
-                    CompletionResponse::Array(v) => v,
-                    CompletionResponse::List(v) => v.items.as_mut(),
-                };
-                for item in items {
-                    if let Some(edit) = item.text_edit.as_mut() {
-                        match edit {
-                            CompletionTextEdit::Edit(edit) => {
-                                modify_outgoing_position(&state, &doc, &mut edit.range.start);
-                                modify_outgoing_position(&state, &doc, &mut edit.range.end);
-                            }
-                            CompletionTextEdit::InsertAndReplace(edit) => {
-                                modify_outgoing_position(&state, &doc, &mut edit.insert.start);
-                                modify_outgoing_position(&state, &doc, &mut edit.insert.end);
-                                modify_outgoing_position(&state, &doc, &mut edit.replace.start);
-                                modify_outgoing_position(&state, &doc, &mut edit.replace.end);
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok(response)
-        })
-    }
-
-    fn completion_item_resolve(
-        &mut self,
-        item: CompletionItem,
-    ) -> BoxFuture<'static, Result<CompletionItem, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            // TODO: Modify incoming positions for edits & diagnostics ...
-
-            let item = server.completion_resolve(state, item).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            // TODO: Modify outgoing positions for edits & diagnostics ...
-
-            Ok(item)
-        })
-    }
-
-    fn code_action(
-        &mut self,
-        mut params: CodeActionParams,
-    ) -> BoxFuture<'static, Result<Option<Vec<CodeActionOrCommand>>, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            let Some(doc) = state.document(&params.text_document.uri) else {
-                return Ok(None);
-            };
-
-            modify_incoming_position(&state, &doc, &mut params.range.start);
-            modify_incoming_position(&state, &doc, &mut params.range.end);
-
-            let mut actions = server.code_action(state, params).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            if let Some(_actions) = actions.as_mut() {
-                // TODO: Modify outgoing positions for document edits ...
-            }
-
-            Ok(actions)
-        })
-    }
-
-    fn code_action_resolve(
-        &mut self,
-        item: CodeAction,
-    ) -> BoxFuture<'static, Result<CodeAction, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            // TODO: Modify incoming positions for edits & diagnostics ...
-
-            let action = server.code_action_resolve(state, item).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            // TODO: Modify outgoing positions for edits & diagnostics ...
-
-            Ok(action)
-        })
-    }
-
-    fn document_link(
-        &mut self,
-        params: DocumentLinkParams,
-    ) -> BoxFuture<'static, Result<Option<Vec<DocumentLink>>, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            let mut link = server.link(state, params).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            if let Some(_links) = link.as_mut() {
-                // TODO: Modify outgoing positions for document links ...
-            }
-
-            Ok(link)
-        })
-    }
-
-    fn document_link_resolve(
-        &mut self,
-        mut link: DocumentLink,
-    ) -> BoxFuture<'static, Result<DocumentLink, Self::Error>> {
-        let server = Arc::clone(&self.server);
-        let state = self.state.clone();
-        Box::pin(async move {
-            let Some(doc) = link.target.as_ref().and_then(|url| state.document(url)) else {
-                return Ok(link);
-            };
-
-            modify_incoming_position(&state, &doc, &mut link.range.start);
-            modify_incoming_position(&state, &doc, &mut link.range.end);
-
-            let mut link = server.link_resolve(state.clone(), link).await?;
-
-            // FUTURE: Document may have changed during call, throw error if so?
-
-            modify_outgoing_position(&state, &doc, &mut link.range.start);
-            modify_outgoing_position(&state, &doc, &mut link.range.end);
-
-            Ok(link)
-        })
-    }
-
-    // Forwarding for: Definition, Declaration, References, Rename
-
-    implement_method!(
-        definition,
-        definition,
-        GotoDefinitionParams,
-        Option<GotoDefinitionResponse>,
-        |params: &GotoDefinitionParams| Some(
-            params
-                .text_document_position_params
-                .text_document
-                .uri
-                .clone()
-        ),
-        |state: &ServerState, doc: &Document, params: &mut GotoDefinitionParams| {
-            modify_incoming_position(
-                state,
-                doc,
-                &mut params.text_document_position_params.position,
-            );
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<GotoDefinitionResponse>| {
-            if let Some(response) = result.as_mut() {
-                match response {
-                    GotoDefinitionResponse::Scalar(loc) => {
-                        modify_outgoing_position(state, doc, &mut loc.range.start);
-                        modify_outgoing_position(state, doc, &mut loc.range.end);
-                    }
-                    GotoDefinitionResponse::Array(locations) => {
-                        for loc in locations.iter_mut() {
-                            modify_outgoing_position(state, doc, &mut loc.range.start);
-                            modify_outgoing_position(state, doc, &mut loc.range.end);
-                        }
-                    }
-                    GotoDefinitionResponse::Link(links) => {
-                        for link in links.iter_mut() {
-                            if let Some(origin_range) = link.origin_selection_range.as_mut() {
-                                modify_outgoing_position(state, doc, &mut origin_range.start);
-                                modify_outgoing_position(state, doc, &mut origin_range.end);
-                            }
-
-                            modify_outgoing_position(state, doc, &mut link.target_range.start);
-                            modify_outgoing_position(state, doc, &mut link.target_range.end);
-
-                            modify_outgoing_position(
-                                state,
-                                doc,
-                                &mut link.target_selection_range.start,
-                            );
-                            modify_outgoing_position(
-                                state,
-                                doc,
-                                &mut link.target_selection_range.end,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    );
-
-    implement_method!(
-        declaration,
-        declaration,
-        GotoDeclarationParams,
-        Option<GotoDeclarationResponse>,
-        |params: &GotoDeclarationParams| Some(
-            params
-                .text_document_position_params
-                .text_document
-                .uri
-                .clone()
-        ),
-        |state: &ServerState, doc: &Document, params: &mut GotoDeclarationParams| {
-            modify_incoming_position(
-                state,
-                doc,
-                &mut params.text_document_position_params.position,
-            );
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<GotoDeclarationResponse>| {
-            if let Some(response) = result.as_mut() {
-                match response {
-                    GotoDeclarationResponse::Scalar(loc) => {
-                        modify_outgoing_position(state, doc, &mut loc.range.start);
-                        modify_outgoing_position(state, doc, &mut loc.range.end);
-                    }
-                    GotoDeclarationResponse::Array(locations) => {
-                        for loc in locations.iter_mut() {
-                            modify_outgoing_position(state, doc, &mut loc.range.start);
-                            modify_outgoing_position(state, doc, &mut loc.range.end);
-                        }
-                    }
-                    GotoDeclarationResponse::Link(links) => {
-                        for link in links.iter_mut() {
-                            if let Some(origin_range) = link.origin_selection_range.as_mut() {
-                                modify_outgoing_position(state, doc, &mut origin_range.start);
-                                modify_outgoing_position(state, doc, &mut origin_range.end);
-                            }
-
-                            modify_outgoing_position(state, doc, &mut link.target_range.start);
-                            modify_outgoing_position(state, doc, &mut link.target_range.end);
-
-                            modify_outgoing_position(
-                                state,
-                                doc,
-                                &mut link.target_selection_range.start,
-                            );
-                            modify_outgoing_position(
-                                state,
-                                doc,
-                                &mut link.target_selection_range.end,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    );
-
-    implement_method!(
-        references,
-        references,
-        ReferenceParams,
-        Option<Vec<Location>>,
-        |params: &ReferenceParams| Some(params.text_document_position.text_document.uri.clone()),
-        |state: &ServerState, doc: &Document, params: &mut ReferenceParams| {
-            modify_incoming_position(state, doc, &mut params.text_document_position.position);
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<Vec<Location>>| {
-            if let Some(locations) = result.as_mut() {
-                for loc in locations.iter_mut() {
-                    modify_outgoing_position(state, doc, &mut loc.range.start);
-                    modify_outgoing_position(state, doc, &mut loc.range.end);
-                }
-            }
-        }
-    );
-
-    implement_method!(
-        rename,
-        rename,
-        RenameParams,
-        Option<WorkspaceEdit>,
-        |params: &RenameParams| Some(params.text_document_position.text_document.uri.clone()),
-        |state: &ServerState, doc: &Document, params: &mut RenameParams| {
-            modify_incoming_position(state, doc, &mut params.text_document_position.position);
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<WorkspaceEdit>| {
-            if let Some(response) = result.as_mut() {
-                if let Some(changes) = response.changes.as_mut() {
-                    for edits in changes.values_mut() {
-                        for edit in edits.iter_mut() {
-                            modify_outgoing_position(state, doc, &mut edit.range.start);
-                            modify_outgoing_position(state, doc, &mut edit.range.end);
-                        }
-                    }
-                }
-            }
-        }
-    );
-
-    implement_method!(
-        rename_prepare,
-        prepare_rename,
-        TextDocumentPositionParams,
-        Option<PrepareRenameResponse>,
-        |params: &TextDocumentPositionParams| Some(params.text_document.uri.clone()),
-        |state: &ServerState, doc: &Document, params: &mut TextDocumentPositionParams| {
-            modify_incoming_position(state, doc, &mut params.position);
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<PrepareRenameResponse>| {
-            if let Some(response) = result.as_mut() {
-                match response {
-                    PrepareRenameResponse::Range(range)
-                    | PrepareRenameResponse::RangeWithPlaceholder { range, .. } => {
-                        modify_outgoing_position(state, doc, &mut range.start);
-                        modify_outgoing_position(state, doc, &mut range.end);
-                    }
-                    PrepareRenameResponse::DefaultBehavior { .. } => {}
-                }
-            }
-        }
-    );
-
-    // Forwarding for: Formatting
-
-    implement_method!(
-        document_format,
-        formatting,
-        DocumentFormattingParams,
-        Option<Vec<TextEdit>>,
-        |params: &DocumentFormattingParams| Some(params.text_document.uri.clone()),
-        |_, _, _| {},
-        |state: &ServerState, doc: &Document, result: &mut Option<Vec<TextEdit>>| {
-            if let Some(edits) = result.as_mut() {
-                for edit in edits.iter_mut() {
-                    modify_outgoing_position(state, doc, &mut edit.range.start);
-                    modify_outgoing_position(state, doc, &mut edit.range.end);
-                }
-            }
-        }
-    );
-
-    implement_method!(
-        document_range_format,
-        range_formatting,
-        DocumentRangeFormattingParams,
-        Option<Vec<TextEdit>>,
-        |params: &DocumentRangeFormattingParams| Some(params.text_document.uri.clone()),
-        |state: &ServerState, doc: &Document, params: &mut DocumentRangeFormattingParams| {
-            modify_incoming_position(state, doc, &mut params.range.start);
-            modify_incoming_position(state, doc, &mut params.range.end);
-        },
-        |state: &ServerState, doc: &Document, result: &mut Option<Vec<TextEdit>>| {
-            if let Some(edits) = result.as_mut() {
-                for edit in edits.iter_mut() {
-                    modify_outgoing_position(state, doc, &mut edit.range.start);
-                    modify_outgoing_position(state, doc, &mut edit.range.end);
-                }
-            }
-        }
-    );
-}
-
-fn modify_incoming_position(state: &ServerState, document: &Document, position: &mut Position) {
-    *position = position_to_encoding(
-        &document.text,
-        *position,
-        state.get_position_encoding(),
-        Encoding::UTF8,
-    );
-}
-
-fn modify_outgoing_position(state: &ServerState, document: &Document, position: &mut Position) {
-    *position = position_to_encoding(
-        &document.text,
-        *position,
-        Encoding::UTF8,
-        state.get_position_encoding(),
+    implement_methods!(
+        hover                   => hover                 @ crate::requests::Hover,
+        completion              => completion            @ crate::requests::Completion,
+        completion_item_resolve => completion_resolve    @ crate::requests::CompletionResolve,
+        code_action             => code_action           @ crate::requests::CodeAction,
+        code_action_resolve     => code_action_resolve   @ crate::requests::CodeActionResolve,
+        document_link           => link                  @ crate::requests::DocumentLink,
+        document_link_resolve   => link_resolve          @ crate::requests::DocumentLinkResolve,
+        declaration             => declaration           @ crate::requests::Declaration,
+        definition              => definition            @ crate::requests::Definition,
+        references              => references            @ crate::requests::References,
+        rename                  => rename                @ crate::requests::Rename,
+        prepare_rename          => rename_prepare        @ crate::requests::RenamePrepare,
+        formatting              => document_format       @ crate::requests::DocumentFormat,
+        range_formatting        => document_range_format @ crate::requests::DocumentRangeFormat,
     );
 }
