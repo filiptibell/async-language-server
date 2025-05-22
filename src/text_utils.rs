@@ -13,56 +13,46 @@ pub struct Position {
     pub col: usize,
 }
 
-impl From<LspPosition> for Position {
-    fn from(position: LspPosition) -> Self {
+impl Position {
+    #[must_use]
+    pub const fn from_lsp(position: LspPosition) -> Self {
         Self {
             line: position.line as usize,
             col: position.character as usize,
+        }
+    }
+
+    #[must_use]
+    pub const fn into_lsp(self) -> LspPosition {
+        #[allow(clippy::cast_possible_truncation)]
+        LspPosition {
+            line: self.line as u32,
+            character: self.col as u32,
         }
     }
 }
 
 impl From<&LspPosition> for Position {
     fn from(position: &LspPosition) -> Self {
-        Self {
-            line: position.line as usize,
-            col: position.character as usize,
-        }
+        Self::from_lsp(*position)
+    }
+}
+
+impl From<LspPosition> for Position {
+    fn from(position: LspPosition) -> Self {
+        Self::from_lsp(position)
+    }
+}
+
+impl From<&Position> for LspPosition {
+    fn from(position: &Position) -> Self {
+        position.into_lsp()
     }
 }
 
 impl From<Position> for LspPosition {
     fn from(position: Position) -> Self {
-        #[allow(clippy::cast_possible_truncation)]
-        Self {
-            line: position.line as u32,
-            character: position.col as u32,
-        }
-    }
-}
-
-#[cfg(feature = "tree-sitter")]
-mod position_tree_sitter {
-    use tree_sitter::Point;
-
-    use super::Position;
-
-    impl From<Point> for Position {
-        fn from(point: Point) -> Self {
-            Self {
-                line: point.row as usize,
-                col: point.column as usize,
-            }
-        }
-    }
-
-    impl From<&Point> for Position {
-        fn from(point: &Point) -> Self {
-            Self {
-                line: point.row as usize,
-                col: point.column as usize,
-            }
-        }
+        position.into_lsp()
     }
 }
 

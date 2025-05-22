@@ -5,6 +5,11 @@ use tree_sitter::{Node, Point as TsPoint, Range as TsRange};
 
 /**
     Converts a tree sitter `Point` to an LSP `Position`
+
+    # LSP Compatibility
+
+    This function assumes that the returned LSP `Position` is one that will
+    be used with this language server, using UTF-8 encoding specifically.
 */
 #[must_use]
 pub const fn ts_point_to_lsp_position(pos: TsPoint) -> LspPosition {
@@ -17,6 +22,11 @@ pub const fn ts_point_to_lsp_position(pos: TsPoint) -> LspPosition {
 
 /**
     Converts a tree sitter `Range` to an LSP `Range`
+
+    # LSP Compatibility
+
+    This function assumes that the returned LSP `Range` is one that will
+    be used with this language server, using UTF-8 encoding specifically.
 */
 #[must_use]
 pub const fn ts_range_to_lsp_range(range: TsRange) -> LspRange {
@@ -32,6 +42,12 @@ pub const fn ts_range_to_lsp_range(range: TsRange) -> LspRange {
 
     This is an **inclusive** bounds check, meaning the position is
     considered *inside* even if it lies on a line or column boundary
+
+    # LSP Compatibility
+
+    This function assumes that the given LSP `Position` is one returned
+    by this language server, using UTF-8 encoding specifically. Using
+    any other encoding **will** return an invalid result here.
 */
 #[must_use]
 pub const fn ts_range_contains_lsp_position(range: TsRange, pos: LspPosition) -> bool {
@@ -59,6 +75,12 @@ pub const fn ts_range_contains_ts_point(range: TsRange, point: TsPoint) -> bool 
 
 /**
     Converts an LSP `Position` to a tree sitter `Point`
+
+    # LSP Compatibility
+
+    This function assumes that the given LSP `Position` is one returned
+    by this language server, using UTF-8 encoding specifically. Using
+    any other encoding **will** return an invalid result here.
 */
 #[must_use]
 pub const fn lsp_position_to_ts_point(pos: LspPosition) -> TsPoint {
