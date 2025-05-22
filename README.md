@@ -3,8 +3,12 @@
 A higher-level abstraction on top of [async-lsp] with good defaults
 and a streamlined integration with [tokio] for stdio / tcp transports.
 
-Designed specifically for making language servers with less boilerplate and handling of text documents, while
-still being as efficient as possible - using the excellent [ropey] library for fast incremental document updates.
+Designed specifically for making language servers with less boilerplate and handling of text documents.
+More specifically, this crate:
+
+- Uses the excellent [ropey] library for fast incremental document updates.
+- Automatically negotiates encoding, supporting any of UTF-8, UTF-16, and UTF-32.
+- Transparently changes encoding of requests & responses to & from UTF-8.
 
 ## Additional Features
 
