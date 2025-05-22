@@ -13,23 +13,26 @@ use async_lsp::{
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
         DocumentFormattingParams, DocumentLink, DocumentLinkParams, DocumentRangeFormattingParams,
         GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams,
-        InitializeResult, InitializedParams, Location, PositionEncodingKind, PrepareRenameResponse,
-        ReferenceParams, RenameParams, SaveOptions, TextDocumentPositionParams,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-        TextDocumentSyncSaveOptions, TextEdit, WorkspaceEdit,
+        InitializeResult, InitializedParams, Location, PrepareRenameResponse, ReferenceParams,
+        RenameParams, SaveOptions, TextDocumentPositionParams, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+        WorkspaceEdit,
         request::{GotoDeclarationParams, GotoDeclarationResponse},
     },
 };
 
-use crate::{server_state::ServerState, server_trait::Server};
+use crate::{server_state::ServerState, server_trait::Server, text_utils::PositionEncoding};
 
-// Default according to LSP specification - will be supported by all clients
-// that do not specify which position encoding they prefer and / or support.
-const POSITION_ENCODING_LSP_DEFAULT: PositionEncodingKind = PositionEncodingKind::UTF16;
-const POSITION_ENCODING_PREFERRED_ORDER: [PositionEncodingKind; 3] = [
-    PositionEncodingKind::UTF8,
-    PositionEncodingKind::UTF16,
-    PositionEncodingKind::UTF32,
+const POSITION_ENCODING_PREFERRED_ORDER: [PositionEncoding; 3] = [
+    // First, prefer to use UTF-32 encoding, since this is
+    // practically zero-cost for anything that Ropey needs
+    PositionEncoding::UTF32,
+    // Second, prefer to use UTF-8 encoding, since this is still
+    // quite low cost to convert, depending on the text contents
+    PositionEncoding::UTF8,
+    // Lastly, use the standard UTF-16 encoding, which is universally
+    // terrible, but also universally supported by all LSP clients
+    PositionEncoding::UTF16,
 ];
 
 /**
@@ -76,8 +79,12 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
 
         // 3. Try to figure out what position encoding best matches what
         //    both our server + the connected client prefers / supports
-        let mut negotiated_position_encoding = POSITION_ENCODING_LSP_DEFAULT;
+        let mut negotiated_position_encoding = PositionEncoding::default();
         if let Some(client_available_encodings) = client_position_encodings {
+            let client_available_encodings: Vec<PositionEncoding> = client_available_encodings
+                .into_iter()
+                .map(Into::into)
+                .collect();
             for server_preferred_encoding in POSITION_ENCODING_PREFERRED_ORDER {
                 if client_available_encodings.contains(&server_preferred_encoding) {
                     negotiated_position_encoding = server_preferred_encoding;
@@ -87,7 +94,7 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         }
 
         // 4. Insert capabilities for our automatic handling of encodings & documents
-        result.capabilities.position_encoding = Some(negotiated_position_encoding.clone());
+        result.capabilities.position_encoding = Some(negotiated_position_encoding.into_lsp());
         result.capabilities.text_document_sync = Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 change: Some(TextDocumentSyncKind::INCREMENTAL),
@@ -101,7 +108,7 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
 
         // 5. Make sure that the state now also uses the negotiated encoding
         self.state
-            .set_position_encoding(negotiated_position_encoding.clone());
+            .set_position_encoding(negotiated_position_encoding);
 
         // 6. Emit a useful message about the negotiation, if enabled
         #[cfg(feature = "tracing")]
@@ -132,7 +139,7 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
             // 6c. Position encoding
             lines.push(format!(
                 "{} position encoding",
-                negotiated_position_encoding.as_str(),
+                negotiated_position_encoding.as_str().to_ascii_uppercase(),
             ));
 
             info!(

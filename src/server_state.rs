@@ -17,7 +17,15 @@ use async_lsp::{
 #[cfg(feature = "tree-sitter")]
 use tree_sitter::{InputEdit, Parser, Point};
 
-use crate::{document::Document, document_matcher::DocumentMatchers, server::Server};
+#[cfg(feature = "tree-sitter")]
+use crate::text_utils::position_to_byte_offset;
+
+use crate::{
+    document::Document,
+    document_matcher::DocumentMatchers,
+    server::Server,
+    text_utils::{PositionEncoding, position_to_char_offset},
+};
 
 /**
     Managed state for an LSP server.
@@ -68,7 +76,7 @@ impl ServerState {
     pub(crate) fn new<T: Server>(client: ClientSocket) -> Self {
         let documents = Arc::new(DashMap::new());
         let matchers = DocumentMatchers::new(T::server_document_matchers());
-        let encoding = Arc::new(PositionEncodingKind::UTF16); // Default for LSP spec
+        let encoding = Arc::new(PositionEncoding::default().into_lsp());
         Self {
             client,
             documents,
@@ -113,8 +121,8 @@ impl ServerState {
         );
     }
 
-    pub(crate) fn set_position_encoding(&mut self, kind: PositionEncodingKind) {
-        self.encoding = Arc::new(kind);
+    pub(crate) fn set_position_encoding(&mut self, kind: impl Into<PositionEncodingKind>) {
+        self.encoding = Arc::new(kind.into());
     }
 
     pub(crate) fn handle_document_open<T: Server>(
@@ -141,102 +149,89 @@ impl ServerState {
 
         doc.version = params.text_document.version;
 
+        let encoding = self.encoding.as_ref();
+
         // Try to perform an incremental update on the document contents, using the changes
         let mut incremental_update_failed = false;
         for change in params.content_changes {
             let Some(range) = change.range else { continue };
 
-            // First, try to get the starting character index,
-            // since without it, we can't incrementally update
-            let start_char = if let Ok(lchar) = doc.text.try_line_to_char(range.start.line as usize)
+            // 1. Convert the LSP positions, using their arbitrary encoding,
+            //    to what Ropey expects to use for its incremental updates
+            let start_char_absolute = if let Ok(line_start_char_offset) =
+                doc.text.try_line_to_char(range.start.line as usize)
             {
-                lchar + range.start.character as usize
+                line_start_char_offset + position_to_char_offset(doc.text(), range.start, encoding)
+            } else {
+                incremental_update_failed = true;
+                break;
+            };
+            let end_char_absolute = if let Ok(line_start_char_offset) =
+                doc.text.try_line_to_char(range.end.line as usize)
+            {
+                (line_start_char_offset + position_to_char_offset(doc.text(), range.end, encoding))
+                    .max(start_char_absolute)
+                    .min(doc.text.len_chars())
             } else {
                 incremental_update_failed = true;
                 break;
             };
 
-            // Try to get the ending character index - if it fails, we will
-            // consider the change as extending to the end of the document
-            let end_char = doc
-                .text
-                .try_line_to_char(range.end.line as usize)
-                .map(|lchar| lchar + range.end.character as usize)
-                .and_then(|c| {
-                    if c > doc.text.len_chars() {
-                        Err(ropey::Error::CharIndexOutOfBounds(c, doc.text.len_chars()))
-                    } else {
-                        Ok(c)
-                    }
-                })
-                .ok();
-
-            // Perform incremental edit on the syntax tree as well, if enabled
-            // Note that we need to do this before updating the document contents
+            // 3. Perform incremental edit on the syntax tree as well, if enabled
+            //    Note that we need to do this before updating the document contents
             #[cfg(feature = "tree-sitter")]
             if doc.tree_sitter_tree.is_some() {
                 // Compute some byte offsets based on the yet-to-be-changed rope
-                let start_byte = doc.text.char_to_byte(start_char);
-                let old_end_byte = doc
-                    .text
-                    .char_to_byte(end_char.unwrap_or_else(|| doc.text.len_chars()));
+                let start_byte = doc.text.char_to_byte(start_char_absolute);
+                let old_end_byte = doc.text.char_to_byte(end_char_absolute);
                 let new_end_byte = start_byte + change.text.len();
 
+                // Create some structs for positions that need to borrow doc contents,
+                // and as such cant be created inline at the input edit creation below
+                let start_position = Point {
+                    row: range.start.line as usize,
+                    column: position_to_byte_offset(&doc.text, range.start, encoding),
+                };
+                let old_end_position = Point {
+                    row: range.end.line as usize,
+                    column: position_to_byte_offset(&doc.text, range.end, encoding),
+                };
+
                 // Compute the new end point based on the contents of the edit
-                let (new_end_row, new_end_col) = change.text.chars().fold(
-                    (range.start.line as usize, range.start.character as usize),
-                    |(row, col), ch| {
+                let (new_end_row, new_end_col_bytes) = change.text.chars().fold(
+                    (start_position.row, start_position.column),
+                    |(row, col_bytes), ch| {
                         if ch == '\n' {
                             (row + 1, 0)
                         } else {
-                            (row, col + 1)
+                            (row, col_bytes + ch.len_utf8())
                         }
                     },
                 );
-
-                // Old end position will be either the LSP `range.end`
-                // or the last character that already existed in the rope
-                let old_end_position = if end_char.is_some() {
-                    Point {
-                        row: range.end.line as usize,
-                        column: range.end.character as usize,
-                    }
-                } else {
-                    let last_row = doc.text.len_lines() - 1;
-                    let last_col = doc.text.line(last_row).len_chars();
-                    Point {
-                        row: last_row,
-                        column: last_col,
-                    }
-                };
 
                 // Finally, apply the edit to incrementally update the syntax tree
                 doc.tree_sitter_tree.as_mut().unwrap().edit(&InputEdit {
                     start_byte,
                     old_end_byte,
                     new_end_byte,
-                    start_position: Point {
-                        row: range.start.line as usize,
-                        column: range.start.character as usize,
-                    },
+                    start_position,
                     old_end_position,
                     new_end_position: Point {
                         row: new_end_row,
-                        column: new_end_col,
+                        column: new_end_col_bytes,
                     },
                 });
             }
 
-            // Try to incrementally update the document contents
-            if let Some(end_char) = end_char {
-                if doc.text.try_remove(start_char..end_char).is_err()
-                    || doc.text.try_insert(start_char, &change.text).is_err()
-                {
-                    incremental_update_failed = true;
-                    break;
-                }
-            } else if doc.text.try_remove(start_char..).is_err()
-                || doc.text.try_insert(start_char, &change.text).is_err()
+            // 4. Finally, try to incrementally update the document contents
+            if doc
+                .text
+                .try_remove(start_char_absolute..end_char_absolute)
+                .is_err()
+                || doc
+                    .text
+                    .try_insert(start_char_absolute, &change.text)
+                    .is_err()
             {
                 incremental_update_failed = true;
                 break;
