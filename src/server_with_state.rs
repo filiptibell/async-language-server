@@ -495,12 +495,64 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         }
     );
 
-    fn declaration(
-        &mut self,
-        params: GotoDeclarationParams,
-    ) -> BoxFuture<'static, Result<Option<GotoDeclarationResponse>, Self::Error>> {
-        self.definition(params) // Uses the exact same types, no need to repeat
-    }
+    implement_method!(
+        declaration,
+        declaration,
+        GotoDeclarationParams,
+        Option<GotoDeclarationResponse>,
+        |params: &GotoDeclarationParams| Some(
+            params
+                .text_document_position_params
+                .text_document
+                .uri
+                .clone()
+        ),
+        |state: &ServerState, doc: &Document, params: &mut GotoDeclarationParams| {
+            modify_incoming_position(
+                state,
+                doc,
+                &mut params.text_document_position_params.position,
+            );
+        },
+        |state: &ServerState, doc: &Document, result: &mut Option<GotoDeclarationResponse>| {
+            if let Some(response) = result.as_mut() {
+                match response {
+                    GotoDeclarationResponse::Scalar(loc) => {
+                        modify_outgoing_position(state, doc, &mut loc.range.start);
+                        modify_outgoing_position(state, doc, &mut loc.range.end);
+                    }
+                    GotoDeclarationResponse::Array(locations) => {
+                        for loc in locations.iter_mut() {
+                            modify_outgoing_position(state, doc, &mut loc.range.start);
+                            modify_outgoing_position(state, doc, &mut loc.range.end);
+                        }
+                    }
+                    GotoDeclarationResponse::Link(links) => {
+                        for link in links.iter_mut() {
+                            if let Some(origin_range) = link.origin_selection_range.as_mut() {
+                                modify_outgoing_position(state, doc, &mut origin_range.start);
+                                modify_outgoing_position(state, doc, &mut origin_range.end);
+                            }
+
+                            modify_outgoing_position(state, doc, &mut link.target_range.start);
+                            modify_outgoing_position(state, doc, &mut link.target_range.end);
+
+                            modify_outgoing_position(
+                                state,
+                                doc,
+                                &mut link.target_selection_range.start,
+                            );
+                            modify_outgoing_position(
+                                state,
+                                doc,
+                                &mut link.target_selection_range.end,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    );
 
     implement_method!(
         references,
