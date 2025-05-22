@@ -9,22 +9,18 @@ use ropey::Rope;
 use async_lsp::{
     ClientSocket, Result,
     lsp_types::{
-        DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        PositionEncodingKind, Url,
+        DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Url,
     },
 };
 
 #[cfg(feature = "tree-sitter")]
 use tree_sitter::{InputEdit, Parser, Point};
 
-#[cfg(feature = "tree-sitter")]
-use crate::text_utils::position_to_byte_offset;
-
 use crate::{
     document::Document,
     document_matcher::DocumentMatchers,
     server::Server,
-    text_utils::{PositionEncoding, position_to_char_offset},
+    text_utils::{Encoding, position_to_encoding},
 };
 
 /**
@@ -39,7 +35,7 @@ pub struct ServerState {
     documents: Arc<DashMap<Url, Document>>,
     #[allow(dead_code)]
     matchers: DocumentMatchers,
-    encoding: Arc<PositionEncodingKind>,
+    encoding: Arc<Encoding>,
 }
 
 impl ServerState {
@@ -76,7 +72,7 @@ impl ServerState {
     pub(crate) fn new<T: Server>(client: ClientSocket) -> Self {
         let documents = Arc::new(DashMap::new());
         let matchers = DocumentMatchers::new(T::server_document_matchers());
-        let encoding = Arc::new(PositionEncoding::default().into_lsp());
+        let encoding = Arc::new(Encoding::default());
         Self {
             client,
             documents,
@@ -121,7 +117,11 @@ impl ServerState {
         );
     }
 
-    pub(crate) fn set_position_encoding(&mut self, kind: impl Into<PositionEncodingKind>) {
+    pub(crate) fn get_position_encoding(&self) -> Encoding {
+        *self.encoding
+    }
+
+    pub(crate) fn set_position_encoding(&mut self, kind: impl Into<Encoding>) {
         self.encoding = Arc::new(kind.into());
     }
 
@@ -161,7 +161,9 @@ impl ServerState {
             let start_char_absolute = if let Ok(line_start_char_offset) =
                 doc.text.try_line_to_char(range.start.line as usize)
             {
-                line_start_char_offset + position_to_char_offset(doc.text(), range.start, encoding)
+                let start =
+                    position_to_encoding(doc.text(), range.start, encoding, Encoding::UTF32);
+                line_start_char_offset + start.character as usize
             } else {
                 incremental_update_failed = true;
                 break;
@@ -169,7 +171,8 @@ impl ServerState {
             let end_char_absolute = if let Ok(line_start_char_offset) =
                 doc.text.try_line_to_char(range.end.line as usize)
             {
-                (line_start_char_offset + position_to_char_offset(doc.text(), range.end, encoding))
+                let end = position_to_encoding(doc.text(), range.end, encoding, Encoding::UTF32);
+                (line_start_char_offset + end.character as usize)
                     .max(start_char_absolute)
                     .min(doc.text.len_chars())
             } else {
@@ -186,20 +189,18 @@ impl ServerState {
                 let old_end_byte = doc.text.char_to_byte(end_char_absolute);
                 let new_end_byte = start_byte + change.text.len();
 
-                // Create some structs for positions that need to borrow doc contents,
-                // and as such cant be created inline at the input edit creation below
-                let start_position = Point {
-                    row: range.start.line as usize,
-                    column: position_to_byte_offset(&doc.text, range.start, encoding),
-                };
-                let old_end_position = Point {
-                    row: range.end.line as usize,
-                    column: position_to_byte_offset(&doc.text, range.end, encoding),
-                };
+                // Convert the start and old end positions to the correct encoding
+                let start_position =
+                    position_to_encoding(&doc.text, range.start, encoding, Encoding::UTF8);
+                let old_end_position =
+                    position_to_encoding(&doc.text, range.end, encoding, Encoding::UTF8);
 
                 // Compute the new end point based on the contents of the edit
                 let (new_end_row, new_end_col_bytes) = change.text.chars().fold(
-                    (start_position.row, start_position.column),
+                    (
+                        start_position.line as usize,
+                        start_position.character as usize,
+                    ),
                     |(row, col_bytes), ch| {
                         if ch == '\n' {
                             (row + 1, 0)
@@ -214,8 +215,14 @@ impl ServerState {
                     start_byte,
                     old_end_byte,
                     new_end_byte,
-                    start_position,
-                    old_end_position,
+                    start_position: Point {
+                        row: start_position.line as usize,
+                        column: start_position.character as usize,
+                    },
+                    old_end_position: Point {
+                        row: old_end_position.line as usize,
+                        column: old_end_position.character as usize,
+                    },
                     new_end_position: Point {
                         row: new_end_row,
                         column: new_end_col_bytes,

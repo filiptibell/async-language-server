@@ -9,30 +9,35 @@ use async_lsp::{
     ClientSocket, LanguageServer, ResponseError, Result,
     lsp_types::{
         CodeAction, CodeActionOrCommand, CodeActionParams, CompletionItem, CompletionParams,
-        CompletionResponse, DidChangeConfigurationParams, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        DocumentFormattingParams, DocumentLink, DocumentLinkParams, DocumentRangeFormattingParams,
-        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams,
-        InitializeResult, InitializedParams, Location, PrepareRenameResponse, ReferenceParams,
-        RenameParams, SaveOptions, TextDocumentPositionParams, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
-        WorkspaceEdit,
+        CompletionResponse, CompletionTextEdit, DidChangeConfigurationParams,
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DidSaveTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkParams,
+        DocumentRangeFormattingParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+        HoverParams, InitializeParams, InitializeResult, InitializedParams, Location, Position,
+        PrepareRenameResponse, ReferenceParams, RenameParams, SaveOptions,
+        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, WorkspaceEdit,
         request::{GotoDeclarationParams, GotoDeclarationResponse},
     },
 };
 
-use crate::{server_state::ServerState, server_trait::Server, text_utils::PositionEncoding};
+use crate::{
+    server::Document,
+    server_state::ServerState,
+    server_trait::Server,
+    text_utils::{Encoding, position_to_encoding},
+};
 
-const POSITION_ENCODING_PREFERRED_ORDER: [PositionEncoding; 3] = [
-    // First, prefer to use UTF-32 encoding, since this is
+const POSITION_ENCODING_PREFERRED_ORDER: [Encoding; 3] = [
+    // First, prefer to use UTF-8 encoding, since this will make all of
+    // the conversions for the custom language server handlers zero-cost
+    Encoding::UTF8,
+    // Second, prefer to use UTF-32 encoding, since this is
     // practically zero-cost for anything that Ropey needs
-    PositionEncoding::UTF32,
-    // Second, prefer to use UTF-8 encoding, since this is still
-    // quite low cost to convert, depending on the text contents
-    PositionEncoding::UTF8,
+    Encoding::UTF32,
     // Lastly, use the standard UTF-16 encoding, which is universally
     // terrible, but also universally supported by all LSP clients
-    PositionEncoding::UTF16,
+    Encoding::UTF16,
 ];
 
 /**
@@ -79,9 +84,9 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
 
         // 3. Try to figure out what position encoding best matches what
         //    both our server + the connected client prefers / supports
-        let mut negotiated_position_encoding = PositionEncoding::default();
+        let mut negotiated_position_encoding = Encoding::default();
         if let Some(client_available_encodings) = client_position_encodings {
-            let client_available_encodings: Vec<PositionEncoding> = client_available_encodings
+            let client_available_encodings: Vec<Encoding> = client_available_encodings
                 .into_iter()
                 .map(Into::into)
                 .collect();
@@ -191,20 +196,79 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
 
     fn hover(
         &mut self,
-        params: HoverParams,
+        mut params: HoverParams,
     ) -> BoxFuture<'static, Result<Option<Hover>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.hover(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position_params.text_document.uri)
+            else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(
+                &state,
+                &doc,
+                &mut params.text_document_position_params.position,
+            );
+
+            let mut hover = server.hover(state.clone(), params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(hover) = hover.as_mut() {
+                if let Some(range) = hover.range.as_mut() {
+                    modify_outgoing_position(&state, &doc, &mut range.start);
+                    modify_outgoing_position(&state, &doc, &mut range.end);
+                }
+            }
+
+            Ok(hover)
+        })
     }
 
     fn completion(
         &mut self,
-        params: CompletionParams,
+        mut params: CompletionParams,
     ) -> BoxFuture<'static, Result<Option<CompletionResponse>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.completion(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.text_document_position.position);
+
+            let mut response = server.completion(state.clone(), params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(response) = response.as_mut() {
+                let items = match response {
+                    CompletionResponse::Array(v) => v,
+                    CompletionResponse::List(v) => v.items.as_mut(),
+                };
+                for item in items {
+                    if let Some(edit) = item.text_edit.as_mut() {
+                        match edit {
+                            CompletionTextEdit::Edit(edit) => {
+                                modify_outgoing_position(&state, &doc, &mut edit.range.start);
+                                modify_outgoing_position(&state, &doc, &mut edit.range.end);
+                            }
+                            CompletionTextEdit::InsertAndReplace(edit) => {
+                                modify_outgoing_position(&state, &doc, &mut edit.insert.start);
+                                modify_outgoing_position(&state, &doc, &mut edit.insert.end);
+                                modify_outgoing_position(&state, &doc, &mut edit.replace.start);
+                                modify_outgoing_position(&state, &doc, &mut edit.replace.end);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(response)
+        })
     }
 
     fn completion_item_resolve(
@@ -213,16 +277,43 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
     ) -> BoxFuture<'static, Result<CompletionItem, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.completion_resolve(state, item).await?) })
+        Box::pin(async move {
+            // TODO: Modify incoming positions for edits & diagnostics ...
+
+            let item = server.completion_resolve(state, item).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            // TODO: Modify outgoing positions for edits & diagnostics ...
+
+            Ok(item)
+        })
     }
 
     fn code_action(
         &mut self,
-        params: CodeActionParams,
+        mut params: CodeActionParams,
     ) -> BoxFuture<'static, Result<Option<Vec<CodeActionOrCommand>>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.code_action(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.range.start);
+            modify_incoming_position(&state, &doc, &mut params.range.end);
+
+            let mut actions = server.code_action(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_actions) = actions.as_mut() {
+                // TODO: Modify outgoing positions for document edits ...
+            }
+
+            Ok(actions)
+        })
     }
 
     fn code_action_resolve(
@@ -231,7 +322,17 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
     ) -> BoxFuture<'static, Result<CodeAction, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.code_action_resolve(state, item).await?) })
+        Box::pin(async move {
+            // TODO: Modify incoming positions for edits & diagnostics ...
+
+            let action = server.code_action_resolve(state, item).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            // TODO: Modify outgoing positions for edits & diagnostics ...
+
+            Ok(action)
+        })
     }
 
     fn document_link(
@@ -240,63 +341,186 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
     ) -> BoxFuture<'static, Result<Option<Vec<DocumentLink>>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.link(state, params).await?) })
+        Box::pin(async move {
+            let mut link = server.link(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_links) = link.as_mut() {
+                // TODO: Modify outgoing positions for document links ...
+            }
+
+            Ok(link)
+        })
     }
 
     fn document_link_resolve(
         &mut self,
-        link: DocumentLink,
+        mut link: DocumentLink,
     ) -> BoxFuture<'static, Result<DocumentLink, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.link_resolve(state, link).await?) })
+        Box::pin(async move {
+            let Some(doc) = link.target.as_ref().and_then(|url| state.document(url)) else {
+                return Ok(link);
+            };
+
+            modify_incoming_position(&state, &doc, &mut link.range.start);
+            modify_incoming_position(&state, &doc, &mut link.range.end);
+
+            let mut link = server.link_resolve(state.clone(), link).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            modify_outgoing_position(&state, &doc, &mut link.range.start);
+            modify_outgoing_position(&state, &doc, &mut link.range.end);
+
+            Ok(link)
+        })
     }
 
     // Forwarding for: Declaration, definition, References, Rename
 
     fn declaration(
         &mut self,
-        params: GotoDeclarationParams,
+        mut params: GotoDeclarationParams,
     ) -> BoxFuture<'static, Result<Option<GotoDeclarationResponse>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.declaration(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position_params.text_document.uri)
+            else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(
+                &state,
+                &doc,
+                &mut params.text_document_position_params.position,
+            );
+
+            let mut declaration = server.declaration(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_declaration) = declaration.as_mut() {
+                // TODO: Modify outgoing positions for declarations ...
+            }
+
+            Ok(declaration)
+        })
     }
 
     fn definition(
         &mut self,
-        params: GotoDefinitionParams,
+        mut params: GotoDefinitionParams,
     ) -> BoxFuture<'static, Result<Option<GotoDefinitionResponse>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.definition(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position_params.text_document.uri)
+            else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(
+                &state,
+                &doc,
+                &mut params.text_document_position_params.position,
+            );
+
+            let mut definition = server.definition(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_definition) = definition.as_mut() {
+                // TODO: Modify outgoing positions for definitions ...
+            }
+
+            Ok(definition)
+        })
     }
 
     fn references(
         &mut self,
-        params: ReferenceParams,
+        mut params: ReferenceParams,
     ) -> BoxFuture<'static, Result<Option<Vec<Location>>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.references(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.text_document_position.position);
+
+            let mut references = server.references(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_references) = references.as_mut() {
+                // TODO: Modify outgoing positions for references ...
+            }
+
+            Ok(references)
+        })
     }
 
     fn rename(
         &mut self,
-        params: RenameParams,
+        mut params: RenameParams,
     ) -> BoxFuture<'static, Result<Option<WorkspaceEdit>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.rename(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document_position.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.text_document_position.position);
+
+            let mut edit = server.rename(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_edit) = edit.as_mut() {
+                // TODO: Modify outgoing positions for workspace edits ...
+            }
+
+            Ok(edit)
+        })
     }
 
     fn prepare_rename(
         &mut self,
-        params: TextDocumentPositionParams,
+        mut params: TextDocumentPositionParams,
     ) -> BoxFuture<'static, Result<Option<PrepareRenameResponse>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.rename_prepare(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.position);
+
+            let mut response = server.rename_prepare(state.clone(), params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(response) = response.as_mut() {
+                match response {
+                    PrepareRenameResponse::Range(range)
+                    | PrepareRenameResponse::RangeWithPlaceholder { range, .. } => {
+                        modify_outgoing_position(&state, &doc, &mut range.start);
+                        modify_outgoing_position(&state, &doc, &mut range.end);
+                    }
+                    PrepareRenameResponse::DefaultBehavior { .. } => {}
+                }
+            }
+
+            Ok(response)
+        })
     }
 
     // Forwarding for: Formatting
@@ -307,15 +531,60 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
     ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.document_format(state, params).await?) })
+        Box::pin(async move {
+            let mut edits = server.document_format(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_edits) = edits.as_mut() {
+                // TODO: Modify outgoing positions for text edits ...
+            }
+
+            Ok(edits)
+        })
     }
 
     fn range_formatting(
         &mut self,
-        params: DocumentRangeFormattingParams,
+        mut params: DocumentRangeFormattingParams,
     ) -> BoxFuture<'static, Result<Option<Vec<TextEdit>>, Self::Error>> {
         let server = Arc::clone(&self.server);
         let state = self.state.clone();
-        Box::pin(async move { Ok(server.document_range_format(state, params).await?) })
+        Box::pin(async move {
+            let Some(doc) = state.document(&params.text_document.uri) else {
+                return Ok(None);
+            };
+
+            modify_incoming_position(&state, &doc, &mut params.range.start);
+            modify_incoming_position(&state, &doc, &mut params.range.end);
+
+            let mut edits = server.document_range_format(state, params).await?;
+
+            // FUTURE: Document may have changed during call, throw error if so?
+
+            if let Some(_edits) = edits.as_mut() {
+                // TODO: Modify outgoing positions for text edits ...
+            }
+
+            Ok(edits)
+        })
     }
+}
+
+fn modify_incoming_position(state: &ServerState, document: &Document, position: &mut Position) {
+    *position = position_to_encoding(
+        &document.text,
+        *position,
+        state.get_position_encoding(),
+        Encoding::UTF8,
+    );
+}
+
+fn modify_outgoing_position(state: &ServerState, document: &Document, position: &mut Position) {
+    *position = position_to_encoding(
+        &document.text,
+        *position,
+        Encoding::UTF8,
+        state.get_position_encoding(),
+    );
 }

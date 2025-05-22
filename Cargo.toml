@@ -10,7 +10,7 @@ name = "async_language_server"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["tracing", "tree-sitter"]
 tracing = ["dep:tracing", "async-lsp/tracing"]
 tree-sitter = ["dep:tree-sitter"]
 
