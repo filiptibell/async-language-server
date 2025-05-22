@@ -197,6 +197,12 @@ impl Document {
     }
 }
 
+impl AsRef<Rope> for Document {
+    fn as_ref(&self) -> &Rope {
+        &self.text
+    }
+}
+
 /**
     A reader over the full text contents of a document.
 

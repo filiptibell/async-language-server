@@ -9,6 +9,8 @@ mod transport;
 
 pub use async_lsp::lsp_types;
 
+pub mod text_utils;
+
 #[cfg(feature = "tree-sitter")]
 pub use tree_sitter;
 
