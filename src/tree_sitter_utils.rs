@@ -3,6 +3,8 @@ use std::collections::VecDeque;
 use async_lsp::lsp_types::{Position as LspPosition, Range as LspRange};
 use tree_sitter::{Node, Point as TsPoint, Range as TsRange};
 
+use crate::text_utils::Position;
+
 /**
     Converts a tree sitter `Point` to an LSP `Position`
 
@@ -158,7 +160,21 @@ where
     Note that this uses **inclusive** bounds checks, meaning that points
     are considered *inside* even if they lie on a line or column boundary
 */
-pub fn find_nearest<'a, F>(node: Node<'a>, pos: LspPosition, predicate: F) -> Option<Node<'a>>
+pub fn find_nearest<'a, F>(
+    node: Node<'a>,
+    pos: impl Into<Position>,
+    predicate: F,
+) -> Option<Node<'a>>
+where
+    F: Fn(Node<'a>) -> bool,
+{
+    find_nearest_inner(node, pos.into().into_lsp(), predicate)
+}
+
+// NOTE: We split this into an "inner" function to get slightly
+// better compile times with the `impl Into<Position>` generic
+
+fn find_nearest_inner<'a, F>(node: Node<'a>, pos: LspPosition, predicate: F) -> Option<Node<'a>>
 where
     F: Fn(Node<'a>) -> bool,
 {
