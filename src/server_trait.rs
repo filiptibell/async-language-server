@@ -7,11 +7,11 @@ use async_lsp::{
     ErrorCode,
     lsp_types::{
         ClientCapabilities, CodeAction, CodeActionParams, CodeActionResponse, CompletionItem,
-        CompletionParams, CompletionResponse, DocumentFormattingParams, DocumentLink,
-        DocumentLinkParams, DocumentRangeFormattingParams, GotoDefinitionParams,
-        GotoDefinitionResponse, Hover, HoverParams, Location, PrepareRenameResponse,
-        ReferenceParams, RenameParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
-        TextEdit, Url, WorkspaceEdit,
+        CompletionParams, CompletionResponse, Diagnostic, DocumentDiagnosticParams,
+        DocumentDiagnosticReportResult, DocumentFormattingParams, DocumentLink, DocumentLinkParams,
+        DocumentRangeFormattingParams, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+        HoverParams, Location, PrepareRenameResponse, ReferenceParams, RenameParams,
+        ServerCapabilities, ServerInfo, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
         request::{GotoDeclarationParams, GotoDeclarationResponse},
     },
 };
@@ -161,6 +161,16 @@ pub trait Server {
         params: DocumentRangeFormattingParams,
     ) -> impl Future<Output = ServerResult<Option<Vec<TextEdit>>>> + Send {
         method_not_implemented("document_range_format")
+    }
+
+    // Diagnostics
+
+    fn document_diagnostics(
+        &self,
+        state: ServerState,
+        params: DocumentDiagnosticParams,
+    ) -> impl Future<Output = ServerResult<DocumentDiagnosticReportResult>> + Send {
+        method_not_implemented("document_diagnostics")
     }
 }
 

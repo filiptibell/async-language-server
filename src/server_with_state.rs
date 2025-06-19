@@ -265,5 +265,6 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         prepare_rename          => rename_prepare        @ crate::requests::RenamePrepare,
         formatting              => document_format       @ crate::requests::DocumentFormat,
         range_formatting        => document_range_format @ crate::requests::DocumentRangeFormat,
+        document_diagnostic     => document_diagnostics  @ crate::requests::DocumentDiagnostics,
     );
 }

@@ -2,7 +2,8 @@ use async_lsp::lsp_types::{
     CodeAction as LspCodeAction, CodeActionOrCommand as LspCodeActionOrCommand,
     CodeActionParams as LspCodeActionParams, CompletionItem as LspCompletionItem,
     CompletionParams as LspCompletionParams, CompletionResponse as LspCompletionResponse,
-    CompletionTextEdit as LspCompletionTextEdit,
+    CompletionTextEdit as LspCompletionTextEdit, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult,
     DocumentFormattingParams as LspDocumentFormattingParams, DocumentLink as LspDocumentLink,
     DocumentLinkParams as LspDocumentLinkParams,
     DocumentRangeFormattingParams as LspDocumentRangeFormattingParams,
@@ -555,6 +556,38 @@ impl Request for DocumentRangeFormat {
             for edit in edits.iter_mut() {
                 modify_outgoing_position(state, document, &mut edit.range.start);
                 modify_outgoing_position(state, document, &mut edit.range.end);
+            }
+        }
+    }
+}
+
+// ════════════════════
+// Diagnostics Requests
+// ════════════════════
+
+pub struct DocumentDiagnostics;
+
+impl Request for DocumentDiagnostics {
+    type Params = DocumentDiagnosticParams;
+    type Response = DocumentDiagnosticReportResult;
+
+    fn extract_url(params: &Self::Params) -> Option<Url> {
+        Some(params.text_document.uri.clone())
+    }
+
+    fn modify_response(state: &ServerState, document: &Document, response: &mut Self::Response) {
+        if let DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) =
+            response
+        {
+            for diag in &mut report.full_document_diagnostic_report.items {
+                modify_outgoing_position(state, document, &mut diag.range.start);
+                modify_outgoing_position(state, document, &mut diag.range.end);
+                if let Some(related) = diag.related_information.as_mut() {
+                    for info in related.iter_mut() {
+                        modify_outgoing_position(state, document, &mut info.location.range.start);
+                        modify_outgoing_position(state, document, &mut info.location.range.end);
+                    }
+                }
             }
         }
     }
