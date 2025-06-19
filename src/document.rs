@@ -1,7 +1,12 @@
-use std::io::{Read, Result, Write};
+use std::{
+    io::{Read, Result, Write},
+    sync::Arc,
+};
 
 use async_lsp::lsp_types::Url;
 use ropey::Rope;
+
+use crate::server::DocumentMatcher;
 
 #[cfg(feature = "tree-sitter")]
 use {
@@ -37,6 +42,7 @@ pub struct Document {
     pub(crate) text: Rope,
     pub(crate) version: i32,
     pub(crate) language: String,
+    pub(crate) matcher: Option<Arc<DocumentMatcher>>,
     #[cfg(feature = "tree-sitter")]
     pub(crate) tree_sitter_lang: Option<Language>,
     #[cfg(feature = "tree-sitter")]
@@ -114,6 +120,18 @@ impl Document {
     #[must_use]
     pub fn language(&self) -> &str {
         &self.language
+    }
+
+    /**
+        Returns the name of the document matcher that this document
+        was matched against, if one was configured, and either a
+        language or glob pattern was matched against.
+
+        See [`DocumentMatcher`] for more information.
+    */
+    #[must_use]
+    pub fn matched_name(&self) -> Option<&str> {
+        self.matcher.as_ref().map(|matcher| matcher.name.as_str())
     }
 }
 

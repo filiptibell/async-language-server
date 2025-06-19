@@ -16,8 +16,8 @@ pub struct DocumentMatcher {
     /**
         The name of the document matcher.
 
-        The name is only used for debugging purposes and will not be
-        used for identifying documents. It does not need to be unique.
+        This may be used as a unique identifier for the matcher,
+        and can be retrieved on documents using [`Document::matched_name`].
     */
     pub name: String,
     /**

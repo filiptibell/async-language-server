@@ -102,6 +102,8 @@ impl ServerState {
             None
         };
 
+        let matcher = self.matchers.find(&url, &language);
+
         self.documents.insert(
             url.clone(),
             Document {
@@ -109,6 +111,7 @@ impl ServerState {
                 text: Rope::from(text),
                 version,
                 language,
+                matcher,
                 #[cfg(feature = "tree-sitter")]
                 tree_sitter_lang,
                 #[cfg(feature = "tree-sitter")]
@@ -300,14 +303,16 @@ impl ServerState {
             return ControlFlow::Continue(());
         };
 
+        // The implementor may want to know what, if any, document
+        // matcher we may have matched against - so let's save that
+        let matcher = self.matchers.find(doc.url(), doc.language());
+        doc.matcher.clone_from(&matcher);
+
         // Since we just read the entire file contents, we will also
         // re-create the entire tree-sitter tree using those new contents
         #[cfg(feature = "tree-sitter")]
         {
-            let mut tree_sitter_lang = self
-                .matchers
-                .find(doc.url(), doc.language())
-                .and_then(|m| m.lang_grammar.clone());
+            let mut tree_sitter_lang = matcher.and_then(|m| m.lang_grammar.clone());
 
             let tree_sitter_tree = if let Some(lang) = tree_sitter_lang.as_ref() {
                 let mut parser = Parser::new();
