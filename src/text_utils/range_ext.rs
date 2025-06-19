@@ -1,5 +1,7 @@
 use std::{any::type_name, ops};
 
+use async_lsp::lsp_types::{Position as LspPosition, Range as LspRange};
+
 /**
     Extension trait for different kinds of ranges:
 
@@ -15,6 +17,8 @@ pub trait RangeExt: Sized {
 
     /**
         Splits the given range into two parts at the specified position.
+
+        Note that the `at` position is _relative_ to the start of the range.
     */
     #[must_use]
     fn split_at(self, at: Self::Position) -> (Self, Self);
@@ -22,6 +26,8 @@ pub trait RangeExt: Sized {
     /**
         Splits the given range into two parts at the specified position,
         and returns the left part.
+
+        Note that the `at` position is _relative_ to the start of the range.
     */
     #[must_use]
     fn split_off_left(self, at: Self::Position) -> Self {
@@ -32,6 +38,8 @@ pub trait RangeExt: Sized {
     /**
         Splits the given range into two parts at the specified position,
         and returns the right part.
+
+        Note that the `at` position is _relative_ to the start of the range.
     */
     #[must_use]
     fn split_off_right(self, at: Self::Position) -> Self {
@@ -41,6 +49,9 @@ pub trait RangeExt: Sized {
 
     /**
         Returns a subrange of the range, starting at `from` and ending at `to`.
+
+        Note that both positions are _relative_ to the start of the range,
+        and that the range itself should be an absolute range.
     */
     #[must_use]
     fn sub(self, from: Self::Position, to: Self::Position) -> Self;
@@ -221,6 +232,67 @@ impl RangeExt for ops::Range<usize> {
             (first, second, third)
         } else {
             (first, None, None)
+        }
+    }
+}
+
+// LSP range implementation
+
+impl RangeExt for LspRange {
+    type Position = LspPosition;
+
+    fn split_at(self, at: Self::Position) -> (Self, Self) {
+        let at_absolute = LspPosition {
+            line: self.start.line + at.line,
+            character: if at.line == 0 {
+                self.start.character + at.character
+            } else {
+                at.character
+            },
+        };
+
+        assert!(at_absolute >= self.start && at_absolute <= self.end);
+
+        let left = LspRange {
+            start: self.start,
+            end: at_absolute,
+        };
+        let right = LspRange {
+            start: at_absolute,
+            end: self.end,
+        };
+
+        (left, right)
+    }
+
+    fn sub(self, from: Self::Position, to: Self::Position) -> Self {
+        assert!(from <= to);
+
+        let from_absolute = LspPosition {
+            line: self.start.line + from.line,
+            character: if from.line == 0 {
+                self.start.character + from.character
+            } else {
+                from.character
+            },
+        };
+
+        let to_absolute = LspPosition {
+            line: self.start.line + to.line,
+            character: if to.line == 0 {
+                self.start.character + to.character
+            } else {
+                to.character
+            },
+        };
+
+        // sanity check
+        assert!(from_absolute >= self.start && from_absolute <= self.end);
+        assert!(to_absolute >= self.start && to_absolute <= self.end);
+
+        LspRange {
+            start: from_absolute,
+            end: to_absolute,
         }
     }
 }
