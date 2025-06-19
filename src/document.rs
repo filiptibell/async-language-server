@@ -154,6 +154,16 @@ impl Document {
     }
 
     /**
+        Returns the UTF-8 text of a [`Node`].
+
+        Panics if the node is not valid for the document.
+    */
+    #[must_use]
+    pub fn node_text(&self, node: Node) -> String {
+        self.text.byte_slice(node.byte_range()).to_string()
+    }
+
+    /**
         Returns a [`Node`] at the root of the syntax tree, if one exists.
     */
     #[must_use]
