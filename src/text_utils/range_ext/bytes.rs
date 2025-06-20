@@ -1,5 +1,8 @@
-impl super::RangeExt for std::ops::Range<usize> {
-    type Position = usize;
+type ByteRange = std::ops::Range<usize>;
+type BytePosition = usize;
+
+impl super::RangeExt for ByteRange {
+    type Position = BytePosition;
 
     fn split_at(self, _text: &str, at: Self::Position) -> (Self, Self) {
         assert!(at <= self.end - self.start);
