@@ -72,19 +72,19 @@ impl super::RangeExt for LspRange {
         if let Some(offset) = text.find(delim) {
             // Find relative position of delimiter from start
             let mut line_num = 0u32;
-            let mut line_char = 0;
+            let mut line_byte = 0;
             for (i, ch) in text.char_indices() {
                 if i >= offset {
                     break;
                 }
                 if ch == '\n' {
                     line_num += 1;
-                    line_char = i + 1;
+                    line_byte = i + 1;
                 }
             }
 
             #[allow(clippy::cast_possible_truncation)]
-            let character = text[line_char..offset].chars().count() as u32;
+            let character = text[line_byte..offset].chars().count() as u32;
             let delim_pos = LspPosition {
                 line: line_num,
                 character,
