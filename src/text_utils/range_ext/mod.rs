@@ -6,6 +6,15 @@ mod lsp;
 #[cfg(feature = "tree-sitter")]
 mod tree_sitter;
 
+#[cfg(test)]
+mod bytes_tests;
+
+#[cfg(test)]
+mod lsp_tests;
+
+#[cfg(all(test, feature = "tree-sitter"))]
+mod tree_sitter_tests;
+
 /**
     Extension trait for different kinds of ranges:
 
