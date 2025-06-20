@@ -23,10 +23,12 @@ impl super::RangeExt for TsRange {
         let mut current_row = 0;
         let mut current_col = 0;
         let mut at_byte = self.start_byte;
+        let mut found = false;
 
         for (i, ch) in text.char_indices() {
             if current_row == at.row && current_col == at.column {
                 at_byte = self.start_byte + i;
+                found = true;
                 break;
             }
             if ch == '\n' {
@@ -35,6 +37,11 @@ impl super::RangeExt for TsRange {
             } else {
                 current_col += ch.len_utf8();
             }
+        }
+
+        // Handle end-of-text case if position wasn't found in loop
+        if !found && current_row == at.row && current_col == at.column {
+            at_byte = self.end_byte;
         }
 
         let left = TsRange {
