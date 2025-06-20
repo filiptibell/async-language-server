@@ -1,14 +1,14 @@
 impl super::RangeExt for std::ops::Range<usize> {
     type Position = usize;
 
-    fn split_at(self, at: Self::Position) -> (Self, Self) {
+    fn split_at(self, _text: &str, at: Self::Position) -> (Self, Self) {
         assert!(at <= self.end - self.start);
         let left = self.start..(self.start + at);
         let right = (self.start + at)..self.end;
         (left, right)
     }
 
-    fn sub(self, from: Self::Position, to: Self::Position) -> Self {
+    fn sub(self, _text: &str, from: Self::Position, to: Self::Position) -> Self {
         assert!(from <= self.end - self.start);
         assert!(to <= self.end - self.start);
         assert!(from <= to);
@@ -32,12 +32,12 @@ impl super::RangeExt for std::ops::Range<usize> {
                 if offset == 0 {
                     None // delimiter is the first character
                 } else {
-                    Some(self.clone().split_off_left(offset))
+                    Some(self.clone().split_off_left(text, offset))
                 },
                 if offset + 1 >= text.len() {
                     None // delimiter is the last character
                 } else {
-                    Some(self.clone().split_off_right(offset + 1))
+                    Some(self.clone().split_off_right(text, offset + 1))
                 },
             )
         } else if !text.is_empty() {

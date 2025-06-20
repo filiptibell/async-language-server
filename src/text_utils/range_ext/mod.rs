@@ -3,6 +3,9 @@ use std::any::type_name;
 mod bytes;
 mod lsp;
 
+#[cfg(feature = "tree-sitter")]
+mod tree_sitter;
+
 /**
     Extension trait for different kinds of ranges:
 
@@ -19,20 +22,24 @@ pub trait RangeExt: Sized {
     /**
         Splits the given range into two parts at the specified position.
 
-        Note that the `at` position is _relative_ to the start of the range.
+        - The `text` parameter must be the exact text corresponding to this range.
+          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+        - The `at` position is _relative_ to the start of the range.
     */
     #[must_use]
-    fn split_at(self, at: Self::Position) -> (Self, Self);
+    fn split_at(self, text: &str, at: Self::Position) -> (Self, Self);
 
     /**
         Splits the given range into two parts at the specified position,
         and returns the left part.
 
-        Note that the `at` position is _relative_ to the start of the range.
+        - The `text` parameter must be the exact text corresponding to this range.
+          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+        - The `at` position is _relative_ to the start of the range.
     */
     #[must_use]
-    fn split_off_left(self, at: Self::Position) -> Self {
-        let (left, _) = self.split_at(at);
+    fn split_off_left(self, text: &str, at: Self::Position) -> Self {
+        let (left, _) = self.split_at(text, at);
         left
     }
 
@@ -40,22 +47,26 @@ pub trait RangeExt: Sized {
         Splits the given range into two parts at the specified position,
         and returns the right part.
 
-        Note that the `at` position is _relative_ to the start of the range.
+        - The `text` parameter must be the exact text corresponding to this range.
+          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+        - The `at` position is _relative_ to the start of the range.
     */
     #[must_use]
-    fn split_off_right(self, at: Self::Position) -> Self {
-        let (_, right) = self.split_at(at);
+    fn split_off_right(self, text: &str, at: Self::Position) -> Self {
+        let (_, right) = self.split_at(text, at);
         right
     }
 
     /**
         Returns a subrange of the range, starting at `from` and ending at `to`.
 
-        Note that both positions are _relative_ to the start of the range,
-        and that the range itself should be an absolute range.
+        - The `text` parameter must be the exact text corresponding to this range.
+          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+        - Both positions are _relative_ to the start of the range, and that the range itself
+          must be an absolute range.
     */
     #[must_use]
-    fn sub(self, from: Self::Position, to: Self::Position) -> Self;
+    fn sub(self, text: &str, from: Self::Position, to: Self::Position) -> Self;
 
     /**
         Splits the given range into two optional subranges, using the given delimiter.

@@ -3,7 +3,7 @@ use async_lsp::lsp_types::{Position as LspPosition, Range as LspRange};
 impl super::RangeExt for LspRange {
     type Position = LspPosition;
 
-    fn split_at(self, at: Self::Position) -> (Self, Self) {
+    fn split_at(self, _text: &str, at: Self::Position) -> (Self, Self) {
         let at_absolute = LspPosition {
             line: self.start.line + at.line,
             character: if at.line == 0 {
@@ -27,7 +27,7 @@ impl super::RangeExt for LspRange {
         (left, right)
     }
 
-    fn sub(self, from: Self::Position, to: Self::Position) -> Self {
+    fn sub(self, _text: &str, from: Self::Position, to: Self::Position) -> Self {
         assert!(from <= to);
 
         let from_absolute = LspPosition {
@@ -93,7 +93,7 @@ impl super::RangeExt for LspRange {
             let left = if offset == 0 {
                 None // delimiter is the first character
             } else {
-                Some(self.split_off_left(delim_pos))
+                Some(self.split_off_left(text, delim_pos))
             };
 
             let right = if offset + 1 >= text.len() {
@@ -110,7 +110,7 @@ impl super::RangeExt for LspRange {
                         character: character + 1,
                     }
                 };
-                Some(self.split_off_right(after_delim_pos))
+                Some(self.split_off_right(text, after_delim_pos))
             };
 
             (left, right)
