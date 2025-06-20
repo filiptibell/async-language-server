@@ -190,7 +190,7 @@ fn split_at_newline_boundary() {
 fn sub_across_multiple_lines() {
     let text = "line1\nline2\nline3";
     let sub_range = r(0, p(0, 0), 17, p(2, 5)).sub(text, p(0, 3), p(2, 2));
-    assert_eq!(sub_range, r(3, p(0, 3), 14, p(2, 2))); // Fixed: 15 → 14
+    assert_eq!(sub_range, r(3, p(0, 3), 14, p(2, 2)));
 }
 
 #[test]
