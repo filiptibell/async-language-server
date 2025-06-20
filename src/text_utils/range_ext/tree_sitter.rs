@@ -93,14 +93,18 @@ impl super::RangeExt for TsRange {
         let mut from_byte = self.start_byte;
         let mut to_byte = self.start_byte;
         let mut found_from = false;
+        let mut found_to = false;
 
         for (i, ch) in text.char_indices() {
             if !found_from && current_row == from.row && current_col == from.column {
                 from_byte = self.start_byte + i;
                 found_from = true;
             }
-            if current_row == to.row && current_col == to.column {
+            if !found_to && current_row == to.row && current_col == to.column {
                 to_byte = self.start_byte + i;
+                found_to = true;
+            }
+            if found_from && found_to {
                 break;
             }
             if ch == '\n' {
@@ -109,6 +113,14 @@ impl super::RangeExt for TsRange {
             } else {
                 current_col += ch.len_utf8();
             }
+        }
+
+        // Handle end-of-text case for positions not found in loop
+        if !found_from && current_row == from.row && current_col == from.column {
+            from_byte = self.end_byte;
+        }
+        if !found_to && current_row == to.row && current_col == to.column {
+            to_byte = self.end_byte;
         }
 
         TsRange {
