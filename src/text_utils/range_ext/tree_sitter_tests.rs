@@ -50,17 +50,8 @@ fn basic_split_off_right() {
 
 #[test]
 fn basic_shrink() {
-    let shrunk = r(0, p(0, 0), 5, p(0, 5)).shrink("hello", 1, 2);
+    let shrunk = r(0, p(0, 0), 5, p(0, 5)).shrink(1, 2);
     assert_eq!(shrunk, r(1, p(0, 1), 3, p(0, 3)));
-}
-
-#[test]
-fn basic_shrink_multiline() {
-    let shrunk = r(0, p(0, 0), 7, p(1, 3)).shrink("abc\ndef", 2, 1);
-    assert_eq!(shrunk, r(2, p(0, 2), 6, p(1, 2)));
-
-    let shrunk = r(0, p(0, 0), 7, p(1, 3)).shrink("abc\ndef", 4, 1);
-    assert_eq!(shrunk, r(4, p(1, 0), 6, p(1, 2)));
 }
 
 #[test]

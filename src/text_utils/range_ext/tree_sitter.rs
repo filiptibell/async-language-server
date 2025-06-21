@@ -60,109 +60,42 @@ impl super::RangeExt for TsRange {
         (left, right)
     }
 
-    fn shrink(self, text: &str, amount_left: usize, amount_right: usize) -> Self {
+    fn shrink(self, amount_left: usize, amount_right: usize) -> Self {
         assert_eq!(
-            text.len(),
-            self.end_byte - self.start_byte,
-            "text and range must be the same length"
+            self.start_point.row, self.end_point.row,
+            "shrink only supports single-line ranges"
         );
 
-        if text.is_empty() {
-            return self;
-        }
+        let start_col = self
+            .start_point
+            .column
+            .saturating_add(amount_left)
+            .min(self.end_point.column);
+        let end_col = self
+            .end_point
+            .column
+            .saturating_sub(amount_right)
+            .max(self.start_point.column);
+        let start_byte = self
+            .start_byte
+            .saturating_add(amount_left)
+            .min(self.end_byte);
+        let end_byte = self
+            .end_byte
+            .saturating_sub(amount_right)
+            .max(self.start_byte);
 
-        // Calculate new start position by moving forward amount_left characters
-        let mut current_row = 0;
-        let mut current_col = 0;
-        let mut new_start_byte = self.start_byte;
-        let mut new_start_point = self.start_point;
-
-        for (chars_processed, (i, ch)) in text.char_indices().enumerate() {
-            if chars_processed >= amount_left {
-                break;
-            }
-
-            new_start_byte = self.start_byte + i + ch.len_utf8();
-
-            if ch == '\n' {
-                current_row += 1;
-                current_col = 0;
-            } else {
-                current_col += ch.len_utf8();
-            }
-
-            new_start_point = TsPosition {
-                row: self.start_point.row + current_row,
-                column: if current_row == 0 {
-                    self.start_point.column + current_col
-                } else {
-                    current_col
-                },
-            };
-        }
-
-        // Calculate new end position by moving backward amount_right characters from end
-        let total_chars = text.chars().count();
-        let end_target = total_chars.saturating_sub(amount_right);
-
-        let mut current_row = 0;
-        let mut current_col = 0;
-        let mut new_end_byte = self.start_byte;
-        let mut new_end_point = self.start_point;
-
-        for (chars_processed, (i, ch)) in text.char_indices().enumerate() {
-            if chars_processed >= end_target {
-                break;
-            }
-
-            new_end_byte = self.start_byte + i + ch.len_utf8();
-
-            if ch == '\n' {
-                current_row += 1;
-                current_col = 0;
-            } else {
-                current_col += ch.len_utf8();
-            }
-
-            new_end_point = TsPosition {
-                row: self.start_point.row + current_row,
-                column: if current_row == 0 {
-                    self.start_point.column + current_col
-                } else {
-                    current_col
-                },
-            };
-        }
-
-        // Handle amount_left = 0 (not processing any characters)
-        if amount_left == 0 {
-            new_start_byte = self.start_byte;
-            new_start_point = self.start_point;
-        }
-
-        // Handle end_target = 0 (shrink everything from right)
-        if end_target == 0 {
-            new_end_byte = self.start_byte;
-            new_end_point = self.start_point;
-        }
-
-        // Ensure new_start <= new_end
-        if new_start_byte > new_end_byte {
-            let mid_byte = new_start_byte;
-            let mid_point = new_start_point;
-            TsRange {
-                start_byte: mid_byte,
-                end_byte: mid_byte,
-                start_point: mid_point,
-                end_point: mid_point,
-            }
-        } else {
-            TsRange {
-                start_byte: new_start_byte,
-                end_byte: new_end_byte,
-                start_point: new_start_point,
-                end_point: new_end_point,
-            }
+        TsRange {
+            start_byte,
+            end_byte,
+            start_point: TsPosition {
+                row: self.start_point.row,
+                column: start_col,
+            },
+            end_point: TsPosition {
+                row: self.end_point.row,
+                column: end_col,
+            },
         }
     }
 

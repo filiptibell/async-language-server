@@ -27,82 +27,33 @@ impl super::RangeExt for LspRange {
         (left, right)
     }
 
-    fn shrink(self, text: &str, amount_left: usize, amount_right: usize) -> Self {
-        if text.is_empty() {
-            return self;
-        }
+    #[allow(clippy::cast_possible_truncation)]
+    fn shrink(self, amount_left: usize, amount_right: usize) -> Self {
+        assert_eq!(
+            self.start.line, self.end.line,
+            "shrink only supports single-line ranges"
+        );
 
-        // Calculate new start position by moving forward amount_left characters from start
-        let mut current_line = 0u32;
-        let mut current_char = 0u32;
-        let mut new_start = self.start;
+        let start_char = self
+            .start
+            .character
+            .saturating_add(amount_left as u32)
+            .min(self.end.character);
+        let end_char = self
+            .end
+            .character
+            .saturating_sub(amount_right as u32)
+            .max(self.start.character);
 
-        #[allow(clippy::cast_possible_truncation)]
-        for (chars_processed, ch) in text.chars().enumerate() {
-            if chars_processed >= amount_left {
-                break;
-            }
-
-            if ch == '\n' {
-                current_line += 1;
-                current_char = 0;
-            } else {
-                current_char += ch.len_utf8() as u32;
-            }
-
-            new_start = LspPosition {
-                line: self.start.line + current_line,
-                character: if current_line == 0 {
-                    self.start.character + current_char
-                } else {
-                    current_char
-                },
-            };
-        }
-
-        // Calculate new end position by moving backward amount_right characters from end
-        let total_chars = text.chars().count();
-        let end_target = total_chars.saturating_sub(amount_right);
-
-        let mut current_line = 0u32;
-        let mut current_char = 0u32;
-        let mut new_end = self.start;
-
-        #[allow(clippy::cast_possible_truncation)]
-        for (chars_processed, ch) in text.chars().enumerate() {
-            if chars_processed >= end_target {
-                break;
-            }
-
-            if ch == '\n' {
-                current_line += 1;
-                current_char = 0;
-            } else {
-                current_char += ch.len_utf8() as u32;
-            }
-
-            new_end = LspPosition {
-                line: self.start.line + current_line,
-                character: if current_line == 0 {
-                    self.start.character + current_char
-                } else {
-                    current_char
-                },
-            };
-        }
-
-        // sanity check
-        if new_start > new_end {
-            let mid_point = new_start;
-            LspRange {
-                start: mid_point,
-                end: mid_point,
-            }
-        } else {
-            LspRange {
-                start: new_start,
-                end: new_end,
-            }
+        LspRange {
+            start: LspPosition {
+                line: self.start.line,
+                character: start_char,
+            },
+            end: LspPosition {
+                line: self.end.line,
+                character: end_char,
+            },
         }
     }
 

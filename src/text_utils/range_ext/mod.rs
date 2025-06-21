@@ -70,13 +70,12 @@ pub trait RangeExt: Sized {
     }
 
     /**
-        Shrinks the range by the given character count, on both the left and right.
+        Shrinks the same-line range by the given character count, on both the left and right.
 
-        - The `text` parameter must be the exact text corresponding to this range.
-          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+        Panics if the range spans across multiple lines.
     */
     #[must_use]
-    fn shrink(self, text: &str, amount_left: usize, amount_right: usize) -> Self;
+    fn shrink(self, amount_left: usize, amount_right: usize) -> Self;
 
     /**
         Returns a subrange of the range, starting at `from` and ending at `to`.

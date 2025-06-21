@@ -34,7 +34,7 @@ fn basic_split_off_right() {
 
 #[test]
 fn basic_shrink() {
-    let shrunk = r(0, 10).shrink(T, 2, 3);
+    let shrunk = r(0, 10).shrink(2, 3);
     assert_eq!(shrunk, r(2, 7));
 }
 
