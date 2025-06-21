@@ -40,6 +40,21 @@ fn basic_split_off_right() {
 }
 
 #[test]
+fn basic_shrink() {
+    let shrunk = r(p(0, 0), p(0, 5)).shrink("hello", 1, 2);
+    assert_eq!(shrunk, r(p(0, 1), p(0, 3)));
+}
+
+#[test]
+fn basic_shrink_multiline() {
+    let shrunk = r(p(0, 0), p(1, 3)).shrink("abc\ndef", 2, 1);
+    assert_eq!(shrunk, r(p(0, 2), p(1, 2)));
+
+    let shrunk = r(p(0, 0), p(1, 3)).shrink("abc\ndef", 4, 1);
+    assert_eq!(shrunk, r(p(1, 0), p(1, 2)));
+}
+
+#[test]
 fn basic_sub() {
     let sub_range = r(p(0, 0), p(0, 10)).sub(T, p(0, 2), p(0, 8));
     assert_eq!(sub_range, r(p(0, 2), p(0, 8)));

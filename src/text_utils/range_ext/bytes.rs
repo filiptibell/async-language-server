@@ -11,6 +11,12 @@ impl super::RangeExt for ByteRange {
         (left, right)
     }
 
+    fn shrink(self, _text: &str, amount_left: usize, amount_right: usize) -> Self {
+        let new_start = self.start.saturating_add(amount_left).min(self.end);
+        let new_end = self.end.saturating_sub(amount_right).max(self.start);
+        new_start..new_end
+    }
+
     fn sub(self, _text: &str, from: Self::Position, to: Self::Position) -> Self {
         assert!(from <= self.end - self.start);
         assert!(to <= self.end - self.start);

@@ -22,8 +22,11 @@ mod tree_sitter_tests;
     2. LSP protocol ranges
     3. Tree-sitter ranges
 
-    Provides methods for splitting ranges into parts and creating
-    subranges based on positions and/or string delimiters.
+    Provides methods for:
+
+    - Splitting ranges into parts
+    - Expanding and shrinking ranges
+    - Creating subranges based on positions and/or string delimiters
 */
 pub trait RangeExt: Sized {
     type Position;
@@ -65,6 +68,15 @@ pub trait RangeExt: Sized {
         let (_, right) = self.split_at(text, at);
         right
     }
+
+    /**
+        Shrinks the range by the given character count, on both the left and right.
+
+        - The `text` parameter must be the exact text corresponding to this range.
+          It is used for tree-sitter ranges, where both line+col and byte offsets are needed.
+    */
+    #[must_use]
+    fn shrink(self, text: &str, amount_left: usize, amount_right: usize) -> Self;
 
     /**
         Returns a subrange of the range, starting at `from` and ending at `to`.

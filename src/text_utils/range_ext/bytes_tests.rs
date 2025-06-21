@@ -33,6 +33,12 @@ fn basic_split_off_right() {
 }
 
 #[test]
+fn basic_shrink() {
+    let shrunk = r(0, 10).shrink(T, 2, 3);
+    assert_eq!(shrunk, r(2, 7));
+}
+
+#[test]
 fn basic_sub() {
     let sub_range = r(0, 10).sub(T, 2, 8);
     assert_eq!(sub_range, r(2, 8));
