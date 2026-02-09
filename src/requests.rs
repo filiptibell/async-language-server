@@ -163,11 +163,11 @@ impl Request for Hover {
     }
 
     fn modify_response(state: &ServerState, document: &Document, response: &mut Self::Response) {
-        if let Some(hover) = response.as_mut() {
-            if let Some(range) = hover.range.as_mut() {
-                modify_outgoing_position(state, document, &mut range.start);
-                modify_outgoing_position(state, document, &mut range.end);
-            }
+        if let Some(hover) = response.as_mut()
+            && let Some(range) = hover.range.as_mut()
+        {
+            modify_outgoing_position(state, document, &mut range.start);
+            modify_outgoing_position(state, document, &mut range.end);
         }
     }
 }
@@ -267,10 +267,10 @@ impl Request for CodeAction {
     fn modify_response(state: &ServerState, document: &Document, response: &mut Self::Response) {
         if let Some(actions) = response.as_mut() {
             for action in actions.iter_mut() {
-                if let LspCodeActionOrCommand::CodeAction(action) = action {
-                    if let Some(edit) = action.edit.as_mut() {
-                        modify_outgoing_workspace_edit(state, document, edit);
-                    }
+                if let LspCodeActionOrCommand::CodeAction(action) = action
+                    && let Some(edit) = action.edit.as_mut()
+                {
+                    modify_outgoing_workspace_edit(state, document, edit);
                 }
             }
         }

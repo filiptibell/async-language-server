@@ -251,12 +251,10 @@ impl ServerState {
         // If the incremental update was successful, and we applied edits to the syntax
         // tree, we must finalize those changes by parsing using tree-sitter once again
         #[cfg(feature = "tree-sitter")]
-        if !incremental_update_failed {
-            if let Some(tree) = doc.tree_sitter_tree.as_ref() {
-                let mut parser = doc_parser(&doc).expect("has tree - must have parser");
-                let updated_tree = parser.parse(doc.text_contents(), Some(tree));
-                doc.tree_sitter_tree = updated_tree;
-            }
+        if !incremental_update_failed && let Some(tree) = doc.tree_sitter_tree.as_ref() {
+            let mut parser = doc_parser(&doc).expect("has tree - must have parser");
+            let updated_tree = parser.parse(doc.text_contents(), Some(tree));
+            doc.tree_sitter_tree = updated_tree;
         }
 
         // If the incremental update failed, we will re-insert the entire file instead

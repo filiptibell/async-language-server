@@ -75,7 +75,7 @@ impl Document {
         Returns a reader over the full text in the document.
     */
     #[must_use]
-    pub fn text_reader(&self) -> DocumentReader {
+    pub fn text_reader(&self) -> DocumentReader<'_> {
         DocumentReader {
             chunks: self.text.chunks(),
         }
@@ -167,7 +167,7 @@ impl Document {
         Returns a [`Node`] at the root of the syntax tree, if one exists.
     */
     #[must_use]
-    pub fn node_at_root(&self) -> Option<Node> {
+    pub fn node_at_root(&self) -> Option<Node<'_>> {
         self.tree_sitter_tree.as_ref().map(|tree| tree.root_node())
     }
 
@@ -175,7 +175,7 @@ impl Document {
         Returns a [`Node`] at the given LSP position, if one exists.
     */
     #[must_use]
-    pub fn node_at_position(&self, position: Position) -> Option<Node> {
+    pub fn node_at_position(&self, position: Position) -> Option<Node<'_>> {
         let root = self.node_at_root()?;
         let point = lsp_position_to_ts_point(position);
         root.descendant_for_point_range(point, point)
@@ -185,7 +185,7 @@ impl Document {
         Similar to [`node_at_position`], except the node must be named.
     */
     #[must_use]
-    pub fn node_at_position_named(&self, position: Position) -> Option<Node> {
+    pub fn node_at_position_named(&self, position: Position) -> Option<Node<'_>> {
         let root = self.node_at_root()?;
         let point = lsp_position_to_ts_point(position);
         root.named_descendant_for_point_range(point, point)

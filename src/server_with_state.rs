@@ -181,7 +181,7 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
                 if let Some(version) = &info.version {
                     lines.push(format!("{} v{}", info.name, version));
                 } else {
-                    lines.push(info.name.to_string());
+                    lines.push(info.name.clone());
                 }
             }
 
