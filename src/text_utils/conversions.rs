@@ -21,7 +21,9 @@ where
         return position;
     }
 
-    let position = position.into();
+    let mut position = position.into();
+    position.line = position.line.min(contents.len_lines().saturating_sub(1));
+
     let slice = contents.line(position.line);
     let column = match (encoding_source, encoding_target) {
         // To UTF8
@@ -63,4 +65,31 @@ where
     };
 
     pos.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use ropey::Rope;
+
+    use super::{Encoding, Position, position_to_encoding};
+
+    #[test]
+    fn converts_utf8_columns_to_utf16() {
+        let text = Rope::from_str("a🙂b");
+        let position = Position { line: 0, col: 5 };
+
+        let converted = position_to_encoding(&text, position, Encoding::UTF8, Encoding::UTF16);
+
+        assert_eq!(converted, Position { line: 0, col: 3 });
+    }
+
+    #[test]
+    fn caps_lines_before_converting_columns() {
+        let text = Rope::from_str("first\n🙂");
+        let position = Position { line: 99, col: 4 };
+
+        let converted = position_to_encoding(&text, position, Encoding::UTF8, Encoding::UTF16);
+
+        assert_eq!(converted, Position { line: 1, col: 2 });
+    }
 }
