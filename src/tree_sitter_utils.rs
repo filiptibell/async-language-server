@@ -54,10 +54,7 @@ pub const fn ts_range_to_lsp_range(range: TsRange) -> LspRange {
 #[must_use]
 pub const fn ts_range_contains_lsp_position(range: TsRange, pos: LspPosition) -> bool {
     let point = lsp_position_to_ts_point(pos);
-    point.row >= range.start_point.row
-        && point.column >= range.start_point.column
-        && point.row <= range.end_point.row
-        && point.column <= range.end_point.column
+    ts_range_contains_ts_point(range, point)
 }
 
 /**
@@ -69,10 +66,10 @@ pub const fn ts_range_contains_lsp_position(range: TsRange, pos: LspPosition) ->
 */
 #[must_use]
 pub const fn ts_range_contains_ts_point(range: TsRange, point: TsPoint) -> bool {
-    point.row >= range.start_point.row
-        && point.column >= range.start_point.column
-        && point.row <= range.end_point.row
-        && point.column <= range.end_point.column
+    (point.row > range.start_point.row
+        || point.row == range.start_point.row && point.column >= range.start_point.column)
+        && (point.row < range.end_point.row
+            || point.row == range.end_point.row && point.column <= range.end_point.column)
 }
 
 /**
@@ -201,5 +198,36 @@ where
         find_ancestor(node, |ancestor| {
             ts_range_contains_lsp_position(ancestor.range(), pos) && predicate(ancestor)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tree_sitter::{Point, Range};
+
+    use super::ts_range_contains_ts_point;
+
+    const fn p(row: usize, column: usize) -> Point {
+        Point { row, column }
+    }
+
+    const fn r(start_point: Point, end_point: Point) -> Range {
+        Range {
+            start_byte: 0,
+            end_byte: 0,
+            start_point,
+            end_point,
+        }
+    }
+
+    #[test]
+    fn range_contains_multiline_points_lexicographically() {
+        let range = r(p(1, 5), p(3, 2));
+
+        assert!(ts_range_contains_ts_point(range, p(1, 5)));
+        assert!(ts_range_contains_ts_point(range, p(2, 0)));
+        assert!(ts_range_contains_ts_point(range, p(3, 2)));
+        assert!(!ts_range_contains_ts_point(range, p(1, 4)));
+        assert!(!ts_range_contains_ts_point(range, p(3, 3)));
     }
 }
