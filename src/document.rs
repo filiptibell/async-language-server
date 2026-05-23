@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Result, Write},
+    io::{Read, Result},
     sync::Arc,
 };
 
@@ -78,6 +78,8 @@ impl Document {
     pub fn text_reader(&self) -> DocumentReader<'_> {
         DocumentReader {
             chunks: self.text.chunks(),
+            current: None,
+            current_offset: 0,
         }
     }
 
@@ -238,14 +240,42 @@ impl AsRef<Rope> for Document {
 */
 pub struct DocumentReader<'d> {
     chunks: ropey::iter::Chunks<'d>,
+    current: Option<&'d str>,
+    current_offset: usize,
 }
 
 impl Read for DocumentReader<'_> {
-    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
-        match self.chunks.next() {
-            Some(chunk) => buf.write(chunk.as_bytes()),
-            _ => Ok(0),
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
         }
+
+        let mut written = 0;
+
+        while written < buf.len() {
+            if self.current.is_none() {
+                self.current = self.chunks.next();
+                self.current_offset = 0;
+            }
+
+            let Some(chunk) = self.current else {
+                break;
+            };
+
+            let remaining = &chunk.as_bytes()[self.current_offset..];
+            let len = remaining.len().min(buf.len() - written);
+            buf[written..written + len].copy_from_slice(&remaining[..len]);
+
+            written += len;
+            self.current_offset += len;
+
+            if self.current_offset == chunk.len() {
+                self.current = None;
+                self.current_offset = 0;
+            }
+        }
+
+        Ok(written)
     }
 }
 
@@ -263,4 +293,32 @@ pub struct DocumentQueryCapture {
     pub text: String,
     /// The document range of the capture
     pub range: Range,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read as _;
+
+    use ropey::Rope;
+
+    use super::DocumentReader;
+
+    #[test]
+    fn reader_preserves_unread_chunk_bytes() {
+        let text = Rope::from_str("hello");
+
+        let mut reader = DocumentReader {
+            chunks: text.chunks(),
+            current: None,
+            current_offset: 0,
+        };
+
+        let mut actual = Vec::new();
+        let mut buf = [0; 1];
+        while reader.read(&mut buf).unwrap() != 0 {
+            actual.push(buf[0]);
+        }
+
+        assert_eq!(actual, b"hello");
+    }
 }

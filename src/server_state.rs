@@ -156,8 +156,23 @@ impl ServerState {
 
         // Try to perform an incremental update on the document contents, using the changes
         let mut incremental_update_failed = false;
+        #[cfg(feature = "tree-sitter")]
+        let mut tree_sitter_incrementally_edited = false;
+
         for change in params.content_changes {
-            let Some(range) = change.range else { continue };
+            let Some(range) = change.range else {
+                doc.text = Rope::from_str(&change.text);
+
+                #[cfg(feature = "tree-sitter")]
+                {
+                    let mut parser = doc_parser(&doc);
+                    doc.tree_sitter_tree = parser
+                        .as_mut()
+                        .and_then(|parser| parser.parse(doc.text_contents(), None));
+                }
+
+                continue;
+            };
 
             // 1. Convert the LSP positions, using their arbitrary encoding,
             //    to what Ropey expects to use for its incremental updates
@@ -231,6 +246,7 @@ impl ServerState {
                         column: new_end_col_bytes,
                     },
                 });
+                tree_sitter_incrementally_edited = true;
             }
 
             // 4. Finally, try to incrementally update the document contents
@@ -251,7 +267,10 @@ impl ServerState {
         // If the incremental update was successful, and we applied edits to the syntax
         // tree, we must finalize those changes by parsing using tree-sitter once again
         #[cfg(feature = "tree-sitter")]
-        if !incremental_update_failed && let Some(tree) = doc.tree_sitter_tree.as_ref() {
+        if !incremental_update_failed
+            && tree_sitter_incrementally_edited
+            && let Some(tree) = doc.tree_sitter_tree.as_ref()
+        {
             let mut parser = doc_parser(&doc).expect("has tree - must have parser");
             let updated_tree = parser.parse(doc.text_contents(), Some(tree));
             doc.tree_sitter_tree = updated_tree;
@@ -340,5 +359,53 @@ fn doc_parser(doc: &Document) -> Option<Parser> {
         Some(parser)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_lsp::{
+        ClientSocket,
+        lsp_types::{
+            DidChangeTextDocumentParams, DidOpenTextDocumentParams, TextDocumentContentChangeEvent,
+            TextDocumentItem, Url, VersionedTextDocumentIdentifier,
+        },
+    };
+
+    use crate::server::Server;
+
+    use super::ServerState;
+
+    struct TestServer;
+
+    impl Server for TestServer {}
+
+    fn url(path: &str) -> Url {
+        Url::parse(&format!("file:///tmp/{path}")).unwrap()
+    }
+
+    fn open_document(state: &mut ServerState, uri: Url, text: impl Into<String>) {
+        let _ = state.handle_document_open::<TestServer>(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem::new(uri, "test".into(), 1, text.into()),
+        });
+    }
+
+    #[test]
+    fn full_content_change_replaces_document_text() {
+        let mut state = ServerState::new::<TestServer>(ClientSocket::new_closed());
+        let uri = url("full-change.txt");
+        open_document(&mut state, uri.clone(), "old");
+
+        let _ = state.handle_document_change::<TestServer>(DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier::new(uri.clone(), 2),
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "new".into(),
+            }],
+        });
+
+        assert_eq!(state.document(&uri).unwrap().text_contents(), "new");
+        assert_eq!(state.document(&uri).unwrap().version(), 2);
     }
 }
