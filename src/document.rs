@@ -6,10 +6,10 @@ use std::{
 use async_lsp::lsp_types::Url;
 use ropey::Rope;
 
-use crate::server::DocumentMatcher;
-
 #[cfg(feature = "tree-sitter")]
 use async_lsp::lsp_types::{Position, Range};
+
+use crate::server::DocumentMatcher;
 
 #[cfg(feature = "tree-sitter")]
 use crate::{

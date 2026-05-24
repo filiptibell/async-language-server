@@ -27,18 +27,12 @@ impl ServerOptions {
 */
 #[derive(Debug, Default, Clone)]
 pub enum WorkspaceDiagnostics {
-    /**
-        Do not advertise or handle workspace diagnostics.
-    */
+    /// Do not advertise or handle workspace diagnostics.
     Disabled,
-    /**
-        Advertise and handle workspace diagnostics.
-    */
+    /// Advertise and handle workspace diagnostics.
     #[default]
     Enabled,
-    /**
-        Advertise workspace diagnostics and toggle them using a setting.
-    */
+    /// Advertise workspace diagnostics and toggle them using a setting.
     Configurable(WorkspaceDiagnosticsSetting),
 }
 
