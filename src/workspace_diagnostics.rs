@@ -1,23 +1,161 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 
 use async_lsp::{
     ErrorCode, ResponseError, Result,
     lsp_types::{
-        DiagnosticServerCapabilities, DocumentDiagnosticParams, DocumentDiagnosticReport,
-        DocumentDiagnosticReportKind, DocumentDiagnosticReportResult, InitializeResult, OneOf,
-        PartialResultParams, TextDocumentIdentifier, Url, WorkDoneProgressParams,
-        WorkspaceDiagnosticParams, WorkspaceDiagnosticReport, WorkspaceDiagnosticReportResult,
-        WorkspaceDocumentDiagnosticReport, WorkspaceFoldersServerCapabilities,
-        WorkspaceFullDocumentDiagnosticReport, WorkspaceServerCapabilities,
-        WorkspaceUnchangedDocumentDiagnosticReport,
+        ClientCapabilities, ConfigurationParams, DiagnosticServerCapabilities,
+        DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportKind,
+        DocumentDiagnosticReportResult, FullDocumentDiagnosticReport, InitializeResult, LSPAny,
+        OneOf, PartialResultParams, Registration, RegistrationParams, TextDocumentIdentifier, Url,
+        WorkDoneProgressParams, WorkspaceDiagnosticParams, WorkspaceDiagnosticReport,
+        WorkspaceDiagnosticReportResult, WorkspaceDocumentDiagnosticReport,
+        WorkspaceFoldersServerCapabilities, WorkspaceFullDocumentDiagnosticReport,
+        WorkspaceServerCapabilities, WorkspaceUnchangedDocumentDiagnosticReport,
+        request::{RegisterCapability, WorkspaceConfiguration, WorkspaceDiagnosticRefresh},
     },
 };
 
-use crate::{requests::Request, server_state::ServerState, server_trait::Server};
+use crate::{
+    requests::Request,
+    server_options::{ServerOptions, WorkspaceDiagnostics, WorkspaceDiagnosticsSetting},
+    server_state::ServerState,
+    server_trait::Server,
+};
 
-pub(crate) fn enable_capabilities(result: &mut InitializeResult) {
-    enable_workspace_diagnostics(result);
-    enable_workspace_folder_tracking(result);
+#[derive(Debug, Clone)]
+pub(crate) struct WorkspaceDiagnosticsState {
+    inner: Arc<WorkspaceDiagnosticsStateInner>,
+}
+
+#[derive(Debug)]
+struct WorkspaceDiagnosticsStateInner {
+    options: WorkspaceDiagnostics,
+    supported: AtomicBool,
+    enabled: AtomicBool,
+    client_configuration: AtomicBool,
+    client_dynamic_configuration: AtomicBool,
+    client_refresh: AtomicBool,
+    generation: AtomicU64,
+}
+
+impl WorkspaceDiagnosticsState {
+    pub(crate) fn new(options: &ServerOptions) -> Self {
+        let enabled = match &options.workspace_diagnostics {
+            WorkspaceDiagnostics::Disabled => false,
+            WorkspaceDiagnostics::Enabled => true,
+            WorkspaceDiagnostics::Configurable(setting) => setting.default_enabled,
+        };
+
+        Self {
+            inner: Arc::new(WorkspaceDiagnosticsStateInner {
+                options: options.workspace_diagnostics.clone(),
+                supported: AtomicBool::new(!matches!(
+                    &options.workspace_diagnostics,
+                    WorkspaceDiagnostics::Disabled
+                )),
+                enabled: AtomicBool::new(enabled),
+                client_configuration: AtomicBool::new(false),
+                client_dynamic_configuration: AtomicBool::new(false),
+                client_refresh: AtomicBool::new(false),
+                generation: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    pub(crate) fn enabled(&self) -> bool {
+        self.supported() && self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn supported(&self) -> bool {
+        self.inner.supported.load(Ordering::Relaxed)
+    }
+
+    fn setting(&self) -> Option<&WorkspaceDiagnosticsSetting> {
+        if let WorkspaceDiagnostics::Configurable(setting) = &self.inner.options {
+            Some(setting)
+        } else {
+            None
+        }
+    }
+
+    fn can_request_configuration(&self) -> bool {
+        self.inner.client_configuration.load(Ordering::Relaxed) && self.setting().is_some()
+    }
+
+    fn can_register_configuration(&self) -> bool {
+        self.inner
+            .client_dynamic_configuration
+            .load(Ordering::Relaxed)
+            && self.setting().is_some()
+    }
+
+    fn can_refresh(&self) -> bool {
+        self.inner.client_refresh.load(Ordering::Relaxed)
+    }
+
+    fn configure(&self, result: &InitializeResult, client_capabilities: &ClientCapabilities) {
+        self.inner.supported.store(
+            !matches!(&self.inner.options, WorkspaceDiagnostics::Disabled)
+                && result.capabilities.diagnostic_provider.is_some(),
+            Ordering::Relaxed,
+        );
+
+        let workspace = client_capabilities.workspace.as_ref();
+        self.inner.client_configuration.store(
+            workspace.and_then(|w| w.configuration).unwrap_or(false),
+            Ordering::Relaxed,
+        );
+        self.inner.client_dynamic_configuration.store(
+            workspace
+                .and_then(|w| w.did_change_configuration.as_ref())
+                .and_then(|c| c.dynamic_registration)
+                .unwrap_or(false),
+            Ordering::Relaxed,
+        );
+        self.inner.client_refresh.store(
+            workspace
+                .and_then(|w| w.diagnostic.as_ref())
+                .and_then(|d| d.refresh_support)
+                .unwrap_or(false),
+            Ordering::Relaxed,
+        );
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.inner.generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn current_generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) -> bool {
+        self.inner.enabled.swap(enabled, Ordering::Relaxed) != enabled
+    }
+}
+
+pub(crate) fn configure_capabilities(
+    state: &ServerState,
+    result: &mut InitializeResult,
+    client_capabilities: &ClientCapabilities,
+) {
+    let workspace_diagnostics = state.workspace_diagnostics();
+    workspace_diagnostics.configure(result, client_capabilities);
+
+    match &workspace_diagnostics.inner.options {
+        WorkspaceDiagnostics::Disabled => disable_workspace_diagnostics(result),
+        WorkspaceDiagnostics::Enabled | WorkspaceDiagnostics::Configurable(_) => {
+            enable_workspace_diagnostics(result);
+            enable_workspace_folder_tracking(result);
+        }
+    }
 }
 
 fn enable_workspace_diagnostics(result: &mut InitializeResult) {
@@ -28,6 +166,19 @@ fn enable_workspace_diagnostics(result: &mut InitializeResult) {
             }
             DiagnosticServerCapabilities::RegistrationOptions(options) => {
                 options.diagnostic_options.workspace_diagnostics = true;
+            }
+        }
+    }
+}
+
+fn disable_workspace_diagnostics(result: &mut InitializeResult) {
+    if let Some(provider) = result.capabilities.diagnostic_provider.as_mut() {
+        match provider {
+            DiagnosticServerCapabilities::Options(options) => {
+                options.workspace_diagnostics = false;
+            }
+            DiagnosticServerCapabilities::RegistrationOptions(options) => {
+                options.diagnostic_options.workspace_diagnostics = false;
             }
         }
     }
@@ -52,6 +203,40 @@ fn enable_workspace_folder_tracking(result: &mut InitializeResult) {
     }
 }
 
+pub(crate) fn apply_initialization_options(state: &ServerState, options: Option<&LSPAny>) {
+    let Some(options) = options else {
+        return;
+    };
+    let workspace_diagnostics = state.workspace_diagnostics();
+    let Some(setting) = workspace_diagnostics.setting() else {
+        return;
+    };
+    let Some(enabled) = setting.key.value(options) else {
+        return;
+    };
+
+    state.set_workspace_diagnostics_enabled(enabled);
+}
+
+pub(crate) fn initialized(state: ServerState) {
+    register_configuration(state.clone());
+    request_configuration(state);
+}
+
+pub(crate) fn did_change_configuration(state: ServerState, settings: &LSPAny) {
+    let workspace_diagnostics = state.workspace_diagnostics();
+    let Some(setting) = workspace_diagnostics.setting() else {
+        return;
+    };
+
+    if let Some(enabled) = setting.key.value(settings) {
+        workspace_diagnostics.next_generation();
+        apply_enabled(state, enabled);
+    } else {
+        request_configuration(state);
+    }
+}
+
 pub(crate) async fn workspace_diagnostic<T>(
     server: Arc<T>,
     state: ServerState,
@@ -60,10 +245,130 @@ pub(crate) async fn workspace_diagnostic<T>(
 where
     T: Server + Send + Sync + 'static,
 {
+    if !state.workspace_diagnostics().supported() {
+        return Err(ResponseError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            "workspace diagnostics are disabled",
+        ));
+    }
+
+    if !state.workspace_diagnostics().enabled() {
+        return Ok(WorkspaceDiagnosticReportResult::Report(
+            disabled_workspace_diagnostic_report(&state, params),
+        ));
+    }
+
     let items = workspace_diagnostic_items(server, state, params).await?;
     Ok(WorkspaceDiagnosticReportResult::Report(
         WorkspaceDiagnosticReport { items },
     ))
+}
+
+fn register_configuration(state: ServerState) {
+    let workspace_diagnostics = state.workspace_diagnostics();
+    if !workspace_diagnostics.can_register_configuration() {
+        return;
+    }
+    let Some(setting) = workspace_diagnostics.setting().cloned() else {
+        return;
+    };
+
+    spawn(async move {
+        let _ = state
+            .client()
+            .request::<RegisterCapability>(RegistrationParams {
+                registrations: vec![Registration {
+                    id: "async-language-server.workspaceDiagnostics.configuration".into(),
+                    method: "workspace/didChangeConfiguration".into(),
+                    register_options: Some(serde_json::json!({
+                        "section": setting.key.section(),
+                    })),
+                }],
+            })
+            .await;
+    });
+}
+
+fn request_configuration(state: ServerState) {
+    let workspace_diagnostics = state.workspace_diagnostics();
+    if !workspace_diagnostics.can_request_configuration() {
+        return;
+    }
+    let Some(setting) = workspace_diagnostics.setting().cloned() else {
+        return;
+    };
+    let generation = workspace_diagnostics.next_generation();
+
+    spawn(async move {
+        let response = state
+            .client()
+            .request::<WorkspaceConfiguration>(ConfigurationParams {
+                items: vec![setting.key.item()],
+            })
+            .await;
+        let Ok(response) = response else {
+            return;
+        };
+        if workspace_diagnostics.current_generation() != generation {
+            return;
+        }
+        let Some(value) = response.first() else {
+            return;
+        };
+        let Some(enabled) = setting.key.value(value) else {
+            return;
+        };
+
+        apply_enabled(state, enabled);
+    });
+}
+
+fn apply_enabled(state: ServerState, enabled: bool) {
+    let refresh = state.set_workspace_diagnostics_enabled(enabled);
+    if refresh && state.workspace_diagnostics().supported() {
+        refresh_diagnostics(state);
+    }
+}
+
+fn refresh_diagnostics(state: ServerState) {
+    if !state.workspace_diagnostics().can_refresh() {
+        return;
+    }
+
+    spawn(async move {
+        let _ = state
+            .client()
+            .request::<WorkspaceDiagnosticRefresh>(())
+            .await;
+    });
+}
+
+fn spawn(future: impl Future<Output = ()> + Send + 'static) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+    }
+}
+
+fn disabled_workspace_diagnostic_report(
+    state: &ServerState,
+    params: WorkspaceDiagnosticParams,
+) -> WorkspaceDiagnosticReport {
+    let items = params
+        .previous_result_ids
+        .into_iter()
+        .map(|previous| {
+            WorkspaceDocumentDiagnosticReport::Full(WorkspaceFullDocumentDiagnosticReport {
+                version: state.document_workspace_version(&previous.uri),
+                uri: previous.uri,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items: Vec::new(),
+                },
+            })
+        })
+        .collect();
+
+    WorkspaceDiagnosticReport { items }
 }
 
 async fn workspace_diagnostic_items<T>(

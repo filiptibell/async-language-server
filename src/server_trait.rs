@@ -19,6 +19,7 @@ use async_lsp::{
 use crate::{
     document_matcher::DocumentMatcher,
     result::{ServerError, ServerResult},
+    server_options::ServerOptions,
     server_state::ServerState,
 };
 
@@ -35,6 +36,10 @@ use crate::{
 pub trait Server {
     fn server_info() -> Option<ServerInfo> {
         None
+    }
+
+    fn server_options(&self) -> ServerOptions {
+        ServerOptions::default()
     }
 
     fn server_capabilities(client_capabilities: ClientCapabilities) -> Option<ServerCapabilities> {

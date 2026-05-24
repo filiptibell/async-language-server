@@ -21,7 +21,9 @@ use crate::{
     document_matcher::DocumentMatchers,
     result::ServerResult,
     server::Server,
+    server_options::ServerOptions,
     text_utils::{Encoding, position_to_encoding},
+    workspace_diagnostics::WorkspaceDiagnosticsState,
     workspace_walker::{WorkspaceWalkConfig, WorkspaceWalker, path_to_url},
 };
 
@@ -36,6 +38,7 @@ pub struct ServerState {
     client: ClientSocket,
     documents: Arc<DashMap<Url, DocumentEntry>>,
     workspace_roots: Arc<DashMap<Url, PathBuf>>,
+    workspace_diagnostics: WorkspaceDiagnosticsState,
     #[allow(dead_code)]
     matchers: DocumentMatchers,
     encoding: Arc<Encoding>,
@@ -98,15 +101,22 @@ impl ServerState {
 // Private implementation
 
 impl ServerState {
+    #[allow(dead_code)]
     pub(crate) fn new<T: Server>(client: ClientSocket) -> Self {
+        Self::with_options::<T>(client, ServerOptions::default())
+    }
+
+    pub(crate) fn with_options<T: Server>(client: ClientSocket, options: ServerOptions) -> Self {
         let documents = Arc::new(DashMap::new());
         let workspace_roots = Arc::new(DashMap::new());
+        let workspace_diagnostics = WorkspaceDiagnosticsState::new(&options);
         let matchers = DocumentMatchers::new(T::server_document_matchers());
         let encoding = Arc::new(Encoding::default());
         Self {
             client,
             documents,
             workspace_roots,
+            workspace_diagnostics,
             matchers,
             encoding,
         }
@@ -224,7 +234,23 @@ impl ServerState {
         }
     }
 
+    pub(crate) fn workspace_diagnostics(&self) -> WorkspaceDiagnosticsState {
+        self.workspace_diagnostics.clone()
+    }
+
+    pub(crate) fn set_workspace_diagnostics_enabled(&self, enabled: bool) -> bool {
+        let changed = self.workspace_diagnostics.set_enabled(enabled);
+        if changed && !enabled {
+            self.remove_workspace_documents();
+        }
+        changed
+    }
+
     pub(crate) fn refresh_workspace_documents<T: Server>(&self) -> ServerResult<Vec<Url>> {
+        if !self.workspace_diagnostics.enabled() {
+            return Ok(self.document_urls());
+        }
+
         let roots = self.workspace_roots();
         if roots.is_empty() {
             return Ok(self.document_urls());
@@ -267,6 +293,11 @@ impl ServerState {
         let mut urls: Vec<_> = urls.into_iter().collect();
         urls.sort();
         Ok(urls)
+    }
+
+    fn remove_workspace_documents(&self) {
+        self.documents
+            .retain(|_, entry| entry.origin == DocumentOrigin::Open);
     }
 
     fn remove_workspace_documents_in_roots(&self, roots: &[PathBuf]) {
@@ -313,8 +344,9 @@ impl ServerState {
 
         let language = entry.document.language.clone();
         let roots = self.workspace_roots();
-        let keep_as_workspace =
-            self.matchers.find_url(&url).is_some() && url_is_in_roots(&url, &roots);
+        let keep_as_workspace = self.workspace_diagnostics.enabled()
+            && self.matchers.find_url(&url).is_some()
+            && url_is_in_roots(&url, &roots);
         drop(entry);
 
         if !keep_as_workspace {
@@ -583,7 +615,7 @@ mod tests {
         },
     };
 
-    use crate::server::{DocumentMatcher, Server};
+    use crate::server::{DocumentMatcher, Server, ServerOptions, WorkspaceDiagnostics};
 
     use super::ServerState;
 
@@ -707,6 +739,30 @@ mod tests {
 
         assert_eq!(state.document(&uri).unwrap().text_contents(), "disk");
         assert_eq!(state.document_workspace_version(&uri), None);
+
+        fs::remove_dir_all(root).expect("temp workspace can be removed");
+    }
+
+    #[test]
+    fn closing_workspace_documents_removes_them_when_workspace_diagnostics_are_disabled() {
+        let root = temp_workspace("close-disabled-workspace-document");
+        let manifest = root.join("a.test");
+        fs::write(&manifest, "disk").expect("test file can be written");
+        let manifest = fs::canonicalize(manifest).expect("test file can be canonicalized");
+        let uri = Url::from_file_path(&manifest).expect("path can be converted to a URL");
+
+        let mut state = ServerState::with_options::<TestServer>(
+            ClientSocket::new_closed(),
+            ServerOptions::default().with_workspace_diagnostics(WorkspaceDiagnostics::disabled()),
+        );
+        state.set_workspace_folders([workspace_folder(&root)]);
+        open_document(&mut state, uri.clone(), "open");
+
+        let _ = state.handle_document_close::<TestServer>(DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier::new(uri.clone()),
+        });
+
+        assert!(state.document(&uri).is_none());
 
         fs::remove_dir_all(root).expect("temp workspace can be removed");
     }

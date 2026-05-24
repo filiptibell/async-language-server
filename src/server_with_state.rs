@@ -135,8 +135,9 @@ pub(crate) struct LanguageServerWithState<T: Server> {
 
 impl<T: Server> LanguageServerWithState<T> {
     pub(crate) fn new(client: ClientSocket, server: T) -> Self {
+        let options = server.server_options();
         let server = Arc::new(server);
-        let state = ServerState::new::<T>(client);
+        let state = ServerState::with_options::<T>(client, options);
         Self { server, state }
     }
 }
@@ -150,6 +151,8 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
         params: InitializeParams,
     ) -> BoxFuture<'static, Result<InitializeResult, Self::Error>> {
         let workspace_folders = workspace_folders(&params);
+        let client_capabilities = params.capabilities.clone();
+        let initialization_options = params.initialization_options.clone();
 
         // 1. Extract available client position encodings, if any
         let client_position_encodings = params
@@ -164,7 +167,15 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
             server_info: T::server_info(),
             capabilities: T::server_capabilities(params.capabilities).unwrap_or_default(),
         };
-        crate::workspace_diagnostics::enable_capabilities(&mut result);
+        crate::workspace_diagnostics::configure_capabilities(
+            &self.state,
+            &mut result,
+            &client_capabilities,
+        );
+        crate::workspace_diagnostics::apply_initialization_options(
+            &self.state,
+            initialization_options.as_ref(),
+        );
 
         // 3. Try to figure out what position encoding best matches what
         //    both our server + the connected client prefers / supports
@@ -240,13 +251,18 @@ impl<T: Server + Send + Sync + 'static> LanguageServer for LanguageServerWithSta
     // Document notification callbacks & content updating
 
     fn initialized(&mut self, _params: InitializedParams) -> ControlFlow<Result<()>> {
+        crate::workspace_diagnostics::initialized(self.state.clone());
         ControlFlow::Continue(())
     }
 
     fn did_change_configuration(
         &mut self,
-        _params: DidChangeConfigurationParams,
+        params: DidChangeConfigurationParams,
     ) -> ControlFlow<Result<()>> {
+        crate::workspace_diagnostics::did_change_configuration(
+            self.state.clone(),
+            &params.settings,
+        );
         ControlFlow::Continue(())
     }
 
@@ -322,11 +338,12 @@ mod tests {
     };
 
     use async_lsp::{
-        ClientSocket, LanguageServer,
+        ClientSocket, ErrorCode, LanguageServer,
         lsp_types::{
             ClientCapabilities, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities,
-            DidChangeWorkspaceFoldersParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
-            DocumentDiagnosticReport, DocumentDiagnosticReportKind, DocumentDiagnosticReportResult,
+            DidChangeConfigurationParams, DidChangeWorkspaceFoldersParams,
+            DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
+            DocumentDiagnosticReportKind, DocumentDiagnosticReportResult,
             FullDocumentDiagnosticReport, InitializeParams, OneOf, PartialResultParams, Position,
             PreviousResultId, Range, RelatedFullDocumentDiagnosticReport, ServerCapabilities,
             TextDocumentItem, Url, WorkDoneProgressParams, WorkspaceDiagnosticParams,
@@ -336,7 +353,9 @@ mod tests {
     };
 
     use crate::{
-        server::{DocumentMatcher, Server, ServerResult, ServerState},
+        server::{
+            DocumentMatcher, Server, ServerOptions, ServerResult, ServerState, WorkspaceDiagnostics,
+        },
         server_with_state::LanguageServerWithState,
     };
 
@@ -344,24 +363,11 @@ mod tests {
 
     impl Server for TestServer {
         fn server_capabilities(_: ClientCapabilities) -> Option<ServerCapabilities> {
-            Some(ServerCapabilities {
-                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
-                    DiagnosticOptions {
-                        inter_file_dependencies: true,
-                        workspace_diagnostics: false,
-                        ..Default::default()
-                    },
-                )),
-                ..Default::default()
-            })
+            test_capabilities()
         }
 
         fn server_document_matchers() -> Vec<DocumentMatcher> {
-            vec![
-                DocumentMatcher::new("Test")
-                    .with_url_globs(["**/*.test", "*.test"])
-                    .with_lang_strings(["test"]),
-            ]
+            test_document_matchers()
         }
 
         async fn document_diagnostics(
@@ -369,37 +375,115 @@ mod tests {
             state: ServerState,
             params: DocumentDiagnosticParams,
         ) -> ServerResult<DocumentDiagnosticReportResult> {
-            let message = if let Some(previous) = params.previous_result_id {
-                format!("{}:{previous}", params.identifier.unwrap_or_default())
-            } else {
-                state
-                    .document(&params.text_document.uri)
-                    .map_or_else(String::new, |doc| doc.text_contents())
-            };
-            let related_documents = if message == "source" {
-                related_uri(&params.text_document.uri).map(|uri| {
-                    HashMap::from([(
-                        uri,
-                        DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
-                            result_id: None,
-                            items: vec![diagnostic("related")],
-                        }),
-                    )])
-                })
-            } else {
-                None
-            };
-
-            Ok(DocumentDiagnosticReportResult::Report(
-                DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
-                    related_documents,
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        result_id: None,
-                        items: vec![diagnostic(message)],
-                    },
-                }),
-            ))
+            test_document_diagnostics(state, params).await
         }
+    }
+
+    struct DisabledServer;
+
+    impl Server for DisabledServer {
+        fn server_capabilities(_: ClientCapabilities) -> Option<ServerCapabilities> {
+            test_capabilities()
+        }
+
+        fn server_document_matchers() -> Vec<DocumentMatcher> {
+            test_document_matchers()
+        }
+
+        fn server_options(&self) -> ServerOptions {
+            ServerOptions::default().with_workspace_diagnostics(WorkspaceDiagnostics::disabled())
+        }
+
+        async fn document_diagnostics(
+            &self,
+            state: ServerState,
+            params: DocumentDiagnosticParams,
+        ) -> ServerResult<DocumentDiagnosticReportResult> {
+            test_document_diagnostics(state, params).await
+        }
+    }
+
+    struct ConfigurableServer;
+
+    impl Server for ConfigurableServer {
+        fn server_capabilities(_: ClientCapabilities) -> Option<ServerCapabilities> {
+            test_capabilities()
+        }
+
+        fn server_document_matchers() -> Vec<DocumentMatcher> {
+            test_document_matchers()
+        }
+
+        fn server_options(&self) -> ServerOptions {
+            ServerOptions::default().with_workspace_diagnostics(
+                WorkspaceDiagnostics::setting("test.workspaceDiagnostics.enabled")
+                    .with_default_enabled(false),
+            )
+        }
+
+        async fn document_diagnostics(
+            &self,
+            state: ServerState,
+            params: DocumentDiagnosticParams,
+        ) -> ServerResult<DocumentDiagnosticReportResult> {
+            test_document_diagnostics(state, params).await
+        }
+    }
+
+    fn test_capabilities() -> Option<ServerCapabilities> {
+        Some(ServerCapabilities {
+            diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
+                inter_file_dependencies: true,
+                workspace_diagnostics: false,
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+
+    fn test_document_matchers() -> Vec<DocumentMatcher> {
+        vec![
+            DocumentMatcher::new("Test")
+                .with_url_globs(["**/*.test", "*.test"])
+                .with_lang_strings(["test"]),
+        ]
+    }
+
+    #[allow(clippy::unused_async)]
+    async fn test_document_diagnostics(
+        state: ServerState,
+        params: DocumentDiagnosticParams,
+    ) -> ServerResult<DocumentDiagnosticReportResult> {
+        let message = if let Some(previous) = params.previous_result_id {
+            format!("{}:{previous}", params.identifier.unwrap_or_default())
+        } else {
+            state
+                .document(&params.text_document.uri)
+                .map_or_else(String::new, |doc| doc.text_contents())
+        };
+        let related_documents = if message == "source" {
+            related_uri(&params.text_document.uri).map(|uri| {
+                HashMap::from([(
+                    uri,
+                    DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
+                        result_id: None,
+                        items: vec![diagnostic("related")],
+                    }),
+                )])
+            })
+        } else {
+            None
+        };
+
+        Ok(DocumentDiagnosticReportResult::Report(
+            DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                related_documents,
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items: vec![diagnostic(message)],
+                },
+            }),
+        ))
     }
 
     #[test]
@@ -425,6 +509,152 @@ mod tests {
         };
         assert_eq!(folders.supported, Some(true));
         assert_eq!(folders.change_notifications, Some(OneOf::Left(true)));
+
+        fs::remove_dir_all(root).expect("temp workspace can be removed");
+    }
+
+    #[test]
+    fn initialize_respects_disabled_workspace_diagnostics() {
+        let root = temp_workspace("disabled-capabilities");
+        let mut server = LanguageServerWithState::new(ClientSocket::new_closed(), DisabledServer);
+
+        let result = futures::executor::block_on(server.initialize(initialize_params(&root)))
+            .expect("server can initialize");
+
+        let Some(DiagnosticServerCapabilities::Options(options)) =
+            result.capabilities.diagnostic_provider
+        else {
+            panic!("expected diagnostic options");
+        };
+        assert!(!options.workspace_diagnostics);
+        assert!(result.capabilities.workspace.is_none());
+
+        let error =
+            futures::executor::block_on(server.workspace_diagnostic(workspace_diagnostic_params()))
+                .expect_err("workspace diagnostics should be disabled");
+        assert_eq!(error.code, ErrorCode::METHOD_NOT_FOUND);
+
+        fs::remove_dir_all(root).expect("temp workspace can be removed");
+    }
+
+    #[test]
+    fn configurable_workspace_diagnostics_can_be_toggled() {
+        let root = temp_workspace("configurable-diagnostics");
+        let file = root.join("a.test");
+        fs::write(&file, "disk").expect("test file can be written");
+        let file = fs::canonicalize(file).expect("test file can be canonicalized");
+        let uri = Url::from_file_path(file).expect("path can be converted to a URL");
+
+        let mut server =
+            LanguageServerWithState::new(ClientSocket::new_closed(), ConfigurableServer);
+        let result = futures::executor::block_on(server.initialize(initialize_params(&root)))
+            .expect("server can initialize");
+
+        let Some(DiagnosticServerCapabilities::Options(options)) =
+            result.capabilities.diagnostic_provider
+        else {
+            panic!("expected diagnostic options");
+        };
+        assert!(options.workspace_diagnostics);
+
+        let report =
+            futures::executor::block_on(server.workspace_diagnostic(WorkspaceDiagnosticParams {
+                previous_result_ids: vec![PreviousResultId {
+                    uri: uri.clone(),
+                    value: "old".into(),
+                }],
+                ..workspace_diagnostic_params()
+            }))
+            .expect("workspace diagnostics can be fetched");
+        let WorkspaceDiagnosticReportResult::Report(report) = report else {
+            panic!("expected full workspace diagnostic report");
+        };
+        let [WorkspaceDocumentDiagnosticReport::Full(report)] = report.items.as_slice() else {
+            panic!("expected one clearing report");
+        };
+        assert_eq!(report.uri, uri);
+        assert!(report.full_document_diagnostic_report.items.is_empty());
+
+        let _ = server.did_change_configuration(DidChangeConfigurationParams {
+            settings: serde_json::json!({
+                "test": {
+                    "workspaceDiagnostics": {
+                        "enabled": true,
+                    },
+                },
+            }),
+        });
+
+        let report =
+            futures::executor::block_on(server.workspace_diagnostic(workspace_diagnostic_params()))
+                .expect("workspace diagnostics can be fetched");
+        let WorkspaceDiagnosticReportResult::Report(report) = report else {
+            panic!("expected full workspace diagnostic report");
+        };
+        let [WorkspaceDocumentDiagnosticReport::Full(report)] = report.items.as_slice() else {
+            panic!("expected one full document report");
+        };
+        assert_eq!(
+            report.full_document_diagnostic_report.items[0].message,
+            "disk"
+        );
+
+        let _ = server.did_change_configuration(DidChangeConfigurationParams {
+            settings: serde_json::json!({
+                "test.workspaceDiagnostics.enabled": false,
+            }),
+        });
+
+        let report =
+            futures::executor::block_on(server.workspace_diagnostic(WorkspaceDiagnosticParams {
+                previous_result_ids: vec![PreviousResultId {
+                    uri,
+                    value: "old".into(),
+                }],
+                ..workspace_diagnostic_params()
+            }))
+            .expect("workspace diagnostics can be fetched");
+        let WorkspaceDiagnosticReportResult::Report(report) = report else {
+            panic!("expected full workspace diagnostic report");
+        };
+        let [WorkspaceDocumentDiagnosticReport::Full(report)] = report.items.as_slice() else {
+            panic!("expected one clearing report");
+        };
+        assert!(report.full_document_diagnostic_report.items.is_empty());
+
+        fs::remove_dir_all(root).expect("temp workspace can be removed");
+    }
+
+    #[test]
+    fn configurable_workspace_diagnostics_read_initialization_options() {
+        let root = temp_workspace("configurable-diagnostics-init");
+        fs::write(root.join("a.test"), "disk").expect("test file can be written");
+
+        let mut server =
+            LanguageServerWithState::new(ClientSocket::new_closed(), ConfigurableServer);
+        let mut params = initialize_params(&root);
+        params.initialization_options = Some(serde_json::json!({
+            "test": {
+                "workspaceDiagnostics": {
+                    "enabled": true,
+                },
+            },
+        }));
+        futures::executor::block_on(server.initialize(params)).expect("server can initialize");
+
+        let report =
+            futures::executor::block_on(server.workspace_diagnostic(workspace_diagnostic_params()))
+                .expect("workspace diagnostics can be fetched");
+        let WorkspaceDiagnosticReportResult::Report(report) = report else {
+            panic!("expected full workspace diagnostic report");
+        };
+        let [WorkspaceDocumentDiagnosticReport::Full(report)] = report.items.as_slice() else {
+            panic!("expected one full document report");
+        };
+        assert_eq!(
+            report.full_document_diagnostic_report.items[0].message,
+            "disk"
+        );
 
         fs::remove_dir_all(root).expect("temp workspace can be removed");
     }

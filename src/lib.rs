@@ -8,6 +8,7 @@ mod document_matcher;
 mod requests;
 mod result;
 mod serve;
+mod server_options;
 mod server_state;
 mod server_trait;
 mod server_with_state;
@@ -26,6 +27,9 @@ pub mod server {
     pub use crate::document_matcher::DocumentMatcher;
     pub use crate::result::{ServerError, ServerErrorCode, ServerResult};
     pub use crate::serve::serve;
+    pub use crate::server_options::{
+        ConfigurationKey, ServerOptions, WorkspaceDiagnostics, WorkspaceDiagnosticsSetting,
+    };
     pub use crate::server_state::ServerState;
     pub use crate::server_trait::Server;
     pub use crate::transport::Transport;
