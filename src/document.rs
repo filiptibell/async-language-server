@@ -9,10 +9,12 @@ use ropey::Rope;
 use crate::server::DocumentMatcher;
 
 #[cfg(feature = "tree-sitter")]
-use {
-    crate::tree_sitter_utils::{lsp_position_to_ts_point, ts_range_to_lsp_range},
-    async_lsp::lsp_types::{Position, Range},
+use async_lsp::lsp_types::{Position, Range};
+
+#[cfg(feature = "tree-sitter")]
+use crate::{
     tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree},
+    tree_sitter_utils::{lsp_position_to_ts_point, ts_range_to_lsp_range},
 };
 
 /**

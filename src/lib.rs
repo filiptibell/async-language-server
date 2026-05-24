@@ -1,3 +1,8 @@
+pub use async_lsp::lsp_types;
+
+#[cfg(feature = "tree-sitter")]
+pub use tree_sitter;
+
 mod document;
 mod document_matcher;
 mod requests;
@@ -8,12 +13,8 @@ mod server_trait;
 mod server_with_state;
 mod transport;
 
-pub use async_lsp::lsp_types;
-
+pub mod oneshot;
 pub mod text_utils;
-
-#[cfg(feature = "tree-sitter")]
-pub use tree_sitter;
 
 #[cfg(feature = "tree-sitter")]
 pub mod tree_sitter_utils;

@@ -153,13 +153,18 @@ impl DocumentMatchers {
     pub(crate) fn find(&self, url: &Url, lang: &str) -> Option<Arc<DocumentMatcher>> {
         let mut lang = lang.trim().to_string();
         lang.make_ascii_lowercase();
-        self.languages.get(lang.as_str()).cloned().or_else(|| {
-            url.to_file_path().ok().and_then(|p| {
-                self.globsets
-                    .iter()
-                    .find(|(globset, _)| globset.is_match(&p))
-                    .map(|(_, matcher)| Arc::clone(matcher))
-            })
+        self.languages
+            .get(lang.as_str())
+            .cloned()
+            .or_else(|| self.find_url(url))
+    }
+
+    pub(crate) fn find_url(&self, url: &Url) -> Option<Arc<DocumentMatcher>> {
+        url.to_file_path().ok().and_then(|p| {
+            self.globsets
+                .iter()
+                .find(|(globset, _)| globset.is_match(&p))
+                .map(|(_, matcher)| Arc::clone(matcher))
         })
     }
 }

@@ -1,10 +1,5 @@
 use std::{ops::ControlFlow, sync::Arc};
 
-use futures::future::BoxFuture;
-
-#[cfg(feature = "tracing")]
-use tracing::{debug, info};
-
 use async_lsp::{
     ClientSocket, ErrorCode, LanguageServer, ResponseError, Result,
     lsp_types::{
@@ -14,6 +9,10 @@ use async_lsp::{
         TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Url,
     },
 };
+use futures::future::BoxFuture;
+
+#[cfg(feature = "tracing")]
+use tracing::{debug, info};
 
 use crate::{server_state::ServerState, server_trait::Server, text_utils::Encoding};
 

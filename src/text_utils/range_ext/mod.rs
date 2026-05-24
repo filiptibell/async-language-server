@@ -3,15 +3,12 @@ use std::any::type_name;
 mod bytes;
 mod lsp;
 
-#[cfg(feature = "tree-sitter")]
-mod tree_sitter;
-
 #[cfg(test)]
 mod bytes_tests;
-
 #[cfg(test)]
 mod lsp_tests;
-
+#[cfg(feature = "tree-sitter")]
+mod tree_sitter;
 #[cfg(all(test, feature = "tree-sitter"))]
 mod tree_sitter_tests;
 

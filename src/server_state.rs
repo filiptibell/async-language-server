@@ -3,15 +3,14 @@
 
 use std::{ops::ControlFlow, sync::Arc};
 
-use dashmap::DashMap;
-use ropey::Rope;
-
 use async_lsp::{
     ClientSocket, Result,
     lsp_types::{
         DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Url,
     },
 };
+use dashmap::DashMap;
+use ropey::Rope;
 
 #[cfg(feature = "tree-sitter")]
 use tree_sitter::{InputEdit, Parser, Point};
@@ -63,6 +62,20 @@ impl ServerState {
     pub fn document(&self, url: &Url) -> Option<Document> {
         let doc = self.documents.get(url)?;
         Some(doc.clone())
+    }
+
+    /**
+        Gets snapshots of all documents currently tracked by the server.
+
+        Each document is returned exactly as it was at the time of
+        calling this method, just like [`ServerState::document`].
+    */
+    #[must_use]
+    pub fn documents(&self) -> Vec<Document> {
+        self.documents
+            .iter()
+            .map(|doc| doc.value().clone())
+            .collect()
     }
 }
 
