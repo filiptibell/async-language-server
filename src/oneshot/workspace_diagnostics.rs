@@ -5,13 +5,14 @@ use async_lsp::lsp_types::{
     DocumentDiagnosticReportResult, Url,
 };
 
-use crate::{document_matcher::DocumentMatchers, result::ServerResult, server_trait::Server};
-
-use super::{
-    path_to_url,
-    server::{OneshotDocument, OneshotServer},
-    walker::{WorkspaceWalkConfig, WorkspaceWalker},
+use crate::{
+    document_matcher::DocumentMatchers,
+    result::ServerResult,
+    server_trait::Server,
+    workspace_walker::{WorkspaceWalkConfig, WorkspaceWalker, path_to_url},
 };
+
+use super::server::{OneshotDocument, OneshotServer};
 
 /**
     Configuration for running a language server once over a workspace.

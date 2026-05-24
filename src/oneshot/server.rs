@@ -17,9 +17,8 @@ use crate::{
     result::{ServerError, ServerResult},
     server_trait::Server,
     server_with_state::LanguageServerWithState,
+    workspace_walker::path_to_url,
 };
-
-use super::path_to_url;
 
 pub(super) struct OneshotServer<S: Server> {
     inner: LanguageServerWithState<S>,

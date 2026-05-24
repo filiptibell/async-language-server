@@ -3,9 +3,9 @@ use async_lsp::lsp_types::{
     CodeActionParams as LspCodeActionParams, CompletionItem as LspCompletionItem,
     CompletionParams as LspCompletionParams, CompletionResponse as LspCompletionResponse,
     CompletionTextEdit as LspCompletionTextEdit, Diagnostic as LspDiagnostic,
-    DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportResult,
-    DocumentFormattingParams as LspDocumentFormattingParams, DocumentLink as LspDocumentLink,
-    DocumentLinkParams as LspDocumentLinkParams,
+    DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentDiagnosticReportKind,
+    DocumentDiagnosticReportResult, DocumentFormattingParams as LspDocumentFormattingParams,
+    DocumentLink as LspDocumentLink, DocumentLinkParams as LspDocumentLinkParams,
     DocumentRangeFormattingParams as LspDocumentRangeFormattingParams,
     GotoDefinitionParams as LspGotoDefinitionParams,
     GotoDefinitionResponse as LspGotoDefinitionResponse, Hover as LspHover,
@@ -145,10 +145,33 @@ fn modify_incoming_diagnostic(state: &ServerState, document: &Document, diag: &m
 }
 
 fn modify_outgoing_diagnostic(state: &ServerState, document: &Document, diag: &mut LspDiagnostic) {
-    modify_outgoing_range(state, document, &mut diag.range);
+    let url = document.url().clone();
+    modify_outgoing_diagnostic_at_url(state, document, &url, diag);
+}
+
+fn modify_outgoing_diagnostic_at_url(
+    state: &ServerState,
+    fallback: &Document,
+    url: &Url,
+    diag: &mut LspDiagnostic,
+) {
+    modify_outgoing_range_at_url(state, fallback, url, &mut diag.range);
     if let Some(related) = diag.related_information.as_mut() {
         for info in related {
-            modify_outgoing_location(state, document, &mut info.location);
+            modify_outgoing_location(state, fallback, &mut info.location);
+        }
+    }
+}
+
+fn modify_outgoing_diagnostic_report_kind_at_url(
+    state: &ServerState,
+    fallback: &Document,
+    url: &Url,
+    report: &mut DocumentDiagnosticReportKind,
+) {
+    if let DocumentDiagnosticReportKind::Full(report) = report {
+        for diag in &mut report.items {
+            modify_outgoing_diagnostic_at_url(state, fallback, url, diag);
         }
     }
 }
@@ -681,11 +704,30 @@ impl Request for DocumentDiagnostics {
     }
 
     fn modify_response(state: &ServerState, document: &Document, response: &mut Self::Response) {
-        if let DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) =
-            response
-        {
-            for diag in &mut report.full_document_diagnostic_report.items {
-                modify_outgoing_diagnostic(state, document, diag);
+        match response {
+            DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) => {
+                for diag in &mut report.full_document_diagnostic_report.items {
+                    modify_outgoing_diagnostic(state, document, diag);
+                }
+                if let Some(related) = report.related_documents.as_mut() {
+                    for (uri, report) in related {
+                        modify_outgoing_diagnostic_report_kind_at_url(state, document, uri, report);
+                    }
+                }
+            }
+            DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Unchanged(report)) => {
+                if let Some(related) = report.related_documents.as_mut() {
+                    for (uri, report) in related {
+                        modify_outgoing_diagnostic_report_kind_at_url(state, document, uri, report);
+                    }
+                }
+            }
+            DocumentDiagnosticReportResult::Partial(report) => {
+                if let Some(related) = report.related_documents.as_mut() {
+                    for (uri, report) in related {
+                        modify_outgoing_diagnostic_report_kind_at_url(state, document, uri, report);
+                    }
+                }
             }
         }
     }
@@ -699,15 +741,17 @@ mod tests {
         ClientSocket,
         lsp_types::{
             CodeActionContext, CodeActionParams, CompletionItem, CompletionResponse, Diagnostic,
-            DidOpenTextDocumentParams, GotoDefinitionResponse, Location, PartialResultParams,
-            Position, Range, TextDocumentIdentifier, TextDocumentItem, TextEdit, Url,
-            WorkDoneProgressParams, WorkspaceEdit,
+            DidOpenTextDocumentParams, DocumentDiagnosticReport, DocumentDiagnosticReportKind,
+            DocumentDiagnosticReportResult, FullDocumentDiagnosticReport, GotoDefinitionResponse,
+            Location, PartialResultParams, Position, Range, RelatedFullDocumentDiagnosticReport,
+            TextDocumentIdentifier, TextDocumentItem, TextEdit, Url, WorkDoneProgressParams,
+            WorkspaceEdit,
         },
     };
 
     use crate::{server::Server, server_state::ServerState, text_utils::Encoding};
 
-    use super::{CodeAction, Completion, Definition, Rename, Request};
+    use super::{CodeAction, Completion, Definition, DocumentDiagnostics, Rename, Request};
 
     struct TestServer;
 
@@ -826,6 +870,45 @@ mod tests {
 
         assert_eq!(params.range, r(0, 0, 4));
         assert_eq!(params.context.diagnostics[0].range, r(0, 4, 4));
+    }
+
+    #[test]
+    fn document_diagnostic_related_documents_are_converted_using_their_own_document() {
+        let (state, source, target) = state_with_documents();
+        let document = state.document(&source).unwrap();
+        let mut response = DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(
+            RelatedFullDocumentDiagnosticReport {
+                related_documents: Some(HashMap::from([(
+                    target.clone(),
+                    DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
+                        result_id: None,
+                        items: vec![Diagnostic {
+                            range: r(0, 4, 4),
+                            message: "diagnostic".into(),
+                            ..Default::default()
+                        }],
+                    }),
+                )])),
+                full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                    result_id: None,
+                    items: Vec::new(),
+                },
+            },
+        ));
+
+        <DocumentDiagnostics as Request>::modify_response(&state, &document, &mut response);
+
+        let DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) =
+            response
+        else {
+            panic!("expected full diagnostic report");
+        };
+        let Some(DocumentDiagnosticReportKind::Full(report)) =
+            report.related_documents.unwrap().remove(&target)
+        else {
+            panic!("expected full related diagnostic report");
+        };
+        assert_eq!(report.items[0].range, r(0, 2, 2));
     }
 
     #[test]

@@ -1,22 +1,26 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
+use async_lsp::lsp_types::Url;
 use ignore::WalkBuilder;
 
 use crate::{result::ServerError, server::ServerResult};
 
 #[derive(Debug, Clone)]
-pub(super) struct WorkspaceWalkConfig {
+pub(crate) struct WorkspaceWalkConfig {
     include_hidden_files: bool,
     respect_ignore_files: bool,
 }
 
 impl WorkspaceWalkConfig {
-    pub(super) fn with_hidden_files(mut self, yes: bool) -> Self {
+    pub(crate) fn with_hidden_files(mut self, yes: bool) -> Self {
         self.include_hidden_files = yes;
         self
     }
 
-    pub(super) fn with_ignore_files(mut self, yes: bool) -> Self {
+    pub(crate) fn with_ignore_files(mut self, yes: bool) -> Self {
         self.respect_ignore_files = yes;
         self
     }
@@ -32,13 +36,13 @@ impl Default for WorkspaceWalkConfig {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct WorkspaceWalker {
+pub(crate) struct WorkspaceWalker {
     roots: Vec<PathBuf>,
     config: WorkspaceWalkConfig,
 }
 
 impl WorkspaceWalker {
-    pub(super) fn new(roots: &[PathBuf], config: WorkspaceWalkConfig) -> ServerResult<Self> {
+    pub(crate) fn new(roots: &[PathBuf], config: WorkspaceWalkConfig) -> ServerResult<Self> {
         let roots = roots
             .iter()
             .map(fs::canonicalize)
@@ -47,11 +51,11 @@ impl WorkspaceWalker {
         Ok(Self { roots, config })
     }
 
-    pub(super) fn roots(&self) -> &[PathBuf] {
+    pub(crate) fn roots(&self) -> &[PathBuf] {
         &self.roots
     }
 
-    pub(super) fn files(&self) -> ServerResult<Vec<PathBuf>> {
+    pub(crate) fn files(&self) -> ServerResult<Vec<PathBuf>> {
         let mut files = Vec::new();
 
         for root in &self.roots {
@@ -80,4 +84,13 @@ fn configure_walker(builder: &mut WalkBuilder, config: &WorkspaceWalkConfig) {
         .git_ignore(config.respect_ignore_files)
         .git_global(config.respect_ignore_files)
         .git_exclude(config.respect_ignore_files);
+}
+
+pub(crate) fn path_to_url(path: &Path) -> ServerResult<Url> {
+    Url::from_file_path(path).map_err(|()| {
+        ServerError::from(format!(
+            "Failed to convert '{}' to a file URL",
+            path.display()
+        ))
+    })
 }

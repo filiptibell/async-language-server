@@ -12,6 +12,8 @@ mod server_state;
 mod server_trait;
 mod server_with_state;
 mod transport;
+mod workspace_diagnostics;
+mod workspace_walker;
 
 pub mod oneshot;
 pub mod text_utils;
